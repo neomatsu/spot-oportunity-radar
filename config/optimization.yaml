@@ -1,0 +1,35 @@
+grid:
+  min_final_score:
+    - 55
+    - 60
+    - 65
+  max_risk_score:
+    - 55
+    - 65
+  max_distance_to_support_pct:
+    - 4
+    - 6
+  max_rsi14:
+    - 55
+    - 65
+  fixed_horizon_days:
+    - 10
+    - 20
+  take_profit_pct:
+    - 0.08
+    - 0.12
+  stop_loss_pct:
+    - 0.05
+    - 0.08
+  require_bullish_trend:
+    - false
+    - true
+
+evaluation_score:
+  expectancy_weight: 0.30
+  profit_factor_weight: 0.25
+  avg_return_weight: 0.20
+  drawdown_penalty_weight: 0.15
+  robustness_weight: 0.10
+  low_trade_threshold: 10
+  low_trade_penalty: 10

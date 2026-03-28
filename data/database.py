@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from sqlalchemy import (
@@ -58,6 +58,7 @@ class AssetORM(Base):
     signals: Mapped[list[SignalORM]] = relationship(back_populates="asset")
     data_status: Mapped[AssetDataStatusORM | None] = relationship(back_populates="asset")
     refresh_logs: Mapped[list[DataRefreshLogORM]] = relationship(back_populates="asset")
+    backtest_trades: Mapped[list[BacktestTradeORM]] = relationship(back_populates="asset")
 
 
 class PriceBarDailyORM(Base):
@@ -185,6 +186,111 @@ class DataRefreshLogORM(Base):
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     asset: Mapped[AssetORM] = relationship(back_populates="refresh_logs")
+
+
+class BacktestRunORM(Base):
+    __tablename__ = "backtest_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    name: Mapped[str] = mapped_column(String(120))
+    mode: Mapped[str] = mapped_column(String(40))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    train_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    train_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    test_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    test_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    assets_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    scenario_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="completed")
+
+    parameter_sets: Mapped[list[BacktestParameterSetORM]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+    metrics: Mapped[list[BacktestMetricORM]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+    trades: Mapped[list[BacktestTradeORM]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class BacktestParameterSetORM(Base):
+    __tablename__ = "backtest_parameter_sets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    parameters_json: Mapped[dict] = mapped_column(JSON)
+    evaluation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    in_sample_metrics_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    out_of_sample_metrics_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    run: Mapped[BacktestRunORM] = relationship(back_populates="parameter_sets")
+    trades: Mapped[list[BacktestTradeORM]] = relationship(
+        back_populates="parameter_set",
+        cascade="all, delete-orphan",
+    )
+
+
+class BacktestMetricORM(Base):
+    __tablename__ = "backtest_metrics"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id"), index=True)
+    scope: Mapped[str] = mapped_column(String(30), default="all")
+    segment_type: Mapped[str] = mapped_column(String(40), default="summary")
+    segment_value: Mapped[str] = mapped_column(String(120), default="all")
+    metrics_json: Mapped[dict] = mapped_column(JSON)
+
+    run: Mapped[BacktestRunORM] = relationship(back_populates="metrics")
+
+
+class BacktestTradeORM(Base):
+    __tablename__ = "backtest_trades"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id"), index=True)
+    parameter_set_id: Mapped[int | None] = mapped_column(
+        ForeignKey("backtest_parameter_sets.id"),
+        index=True,
+        nullable=True,
+    )
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    asset_type: Mapped[str] = mapped_column(String(20))
+    sector: Mapped[str] = mapped_column(String(120))
+    recommendation: Mapped[str] = mapped_column(String(20))
+    score_band: Mapped[str] = mapped_column(String(30))
+    risk_band: Mapped[str] = mapped_column(String(30))
+    entry_signal_date: Mapped[date] = mapped_column(Date)
+    entry_date: Mapped[date] = mapped_column(Date)
+    exit_date: Mapped[date] = mapped_column(Date)
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[float] = mapped_column(Float)
+    position_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    gross_return_pct: Mapped[float] = mapped_column(Float)
+    net_return_pct: Mapped[float] = mapped_column(Float)
+    max_drawdown_pct: Mapped[float] = mapped_column(Float)
+    mae_pct: Mapped[float] = mapped_column(Float)
+    mfe_pct: Mapped[float] = mapped_column(Float)
+    holding_days: Mapped[int] = mapped_column()
+    exit_reason: Mapped[str] = mapped_column(String(40))
+    technical_score: Mapped[float] = mapped_column(Float)
+    risk_score: Mapped[float] = mapped_column(Float)
+    portfolio_fit_score: Mapped[float] = mapped_column(Float)
+    final_score: Mapped[float] = mapped_column(Float)
+    invalidation_level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rationale_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    parameters_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    run: Mapped[BacktestRunORM] = relationship(back_populates="trades")
+    parameter_set: Mapped[BacktestParameterSetORM | None] = relationship(back_populates="trades")
+    asset: Mapped[AssetORM] = relationship(back_populates="backtest_trades")
 
 
 settings = get_settings()

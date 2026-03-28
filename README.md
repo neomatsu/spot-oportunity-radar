@@ -167,6 +167,20 @@ python -m streamlit run app/main.py
 
 Tambien puedes usar [run_spot_opportunity_radar.bat](C:/Personal/Workspace/spot-oportunity-radar/run_spot_opportunity_radar.bat).
 
+Estudio amplio de configuraciones y generacion de informe:
+
+```bash
+python -m jobs.run_backtesting_study
+```
+
+Esto genera artefactos en `reports/`, incluyendo:
+
+- `backtesting_optimization_report.md`
+- `backtesting_top_configs.csv`
+- `backtesting_by_asset.csv`
+- `backtesting_segment_analysis.csv`
+- `backtesting_discarded_configs.csv`
+
 ## Como interpretar las senales
 
 ### Technical score
@@ -238,17 +252,116 @@ El tamano sugerido de posicion depende de:
 - `Watchlist`: filtros por tipo de activo, riesgo y recomendacion con color por fila, mas `data_mode`, `freshness_status` y `last_refresh_source`
 - `Asset Detail`: grafico con medias, soporte, RSI, breakdown del score, rationale, invalidation y estado de datos
 - `Portfolio`: exposicion por activo, sector y clase; alertas simples de concentracion
-- `Backtesting`: revision ligera de senales historicas con retornos a 5, 10 y 20 sesiones
+- `Backtesting`: motor historico configurable con modos trade-by-trade y portfolio basico,
+  reglas de salida, segmentacion, persistencia y grid search de parametros
 
-## Backtesting actual
+## Backtesting
 
-La version incluida es deliberadamente simple:
+El modulo `backtesting/` ahora esta separado en:
 
-- usa senales ya persistidas
-- compara precio en fecha de senal vs 5, 10 y 20 sesiones despues
-- calcula hit rate y retorno medio
+- `engine.py`: simulacion historica barra a barra sin look-ahead
+- `scenarios.py`: escenarios y splits train/test
+- `metrics.py`: metricas por trade, estrategia y segmentos
+- `optimizer.py`: grid search simple y explicable
+- `reporting.py`: adaptacion de resultados a tablas y graficos
+- `models.py`: dominio de escenarios, trades, runs y resultados
 
-No sustituye un backtester completo con reglas de ejecucion, slippage o capital management.
+### Como funciona
+
+1. Para cada activo y fecha se recalculan indicadores, soporte, riesgo, portfolio fit,
+   final score y recomendacion usando solo datos disponibles hasta ese momento.
+2. Si la configuracion de entrada lo permite, se abre una operacion simulada.
+3. La salida puede ser por:
+   - horizonte fijo
+   - take profit / stop loss
+   - perdida de señal
+   - invalidacion
+   - o una regla hibrida con primer evento
+4. Cada trade guarda:
+   - fecha de entrada y salida
+   - precio de entrada y salida
+   - retorno bruto y neto
+   - drawdown maximo de la operacion
+   - MFE / MAE
+   - scores y rationale de entrada
+   - parametros usados
+
+### Modos disponibles
+
+- `trade_by_trade`: evalua cada señal de forma independiente
+- `portfolio`: version basica con capital inicial, cash, maximo de posiciones abiertas
+  y sizing sencillo
+
+### Configuracion
+
+Las reglas viven en:
+
+- `config/backtesting.yaml`
+- `config/optimization.yaml`
+
+Parametros configurables:
+
+- modo de entrada: cierre de señal o apertura siguiente
+- comision y slippage
+- tamaño fijo o basado en `suggested_weight_add`
+- umbral minimo de `final_opportunity_score`
+- maximo `risk_score`
+- distancia maxima a soporte
+- RSI maximo
+- exigir o no tendencia alcista de fondo
+- take profit, stop loss y horizonte
+- criterio compuesto de evaluacion en optimizacion
+
+### Metricas
+
+Por estrategia:
+
+- numero total de trades
+- win rate
+- retorno medio y mediano
+- profit factor
+- expectancy
+- max drawdown
+- mejor y peor trade
+- duracion media
+- ratio retorno / drawdown
+- sharpe simplificado
+- trades por mes
+
+Por segmento:
+
+- activo
+- sector
+- asset type
+- recomendacion
+- score band
+- risk band
+
+### Optimizacion y robustez
+
+La optimizacion usa `grid search` simple y guarda:
+
+- parametros de cada combinacion
+- metricas in-sample
+- metricas out-of-sample
+- evaluation score compuesto
+
+Medidas anti-overfitting incluidas:
+
+- split temporal in-sample / out-of-sample
+- penalizacion a combinaciones con muy pocos trades
+- evaluacion compuesta que no depende solo del retorno bruto
+
+### Persistencia
+
+El sistema persiste resultados en SQLite mediante:
+
+- `backtest_runs`
+- `backtest_parameter_sets`
+- `backtest_metrics`
+- `backtest_trades`
+
+SQLite sigue siendo la fuente principal tambien para el analisis historico.
 
 ## Limitaciones actuales
 
@@ -257,6 +370,10 @@ No sustituye un backtester completo con reglas de ejecucion, slippage o capital 
 - el modo demo usa series sinteticas razonables, utiles para probar la app pero no para validar edge real
 - Alpha Vantage gratuito devuelve historico compacto; algunos activos no llegaran de inicio a SMA200 completa
 - el sizing es prudente y configurable, pero no es un motor de optimizacion de cartera
+- la simulacion de cartera es intencionalmente basica: no modela correlaciones, mark-to-market
+  intradiario ni prioridades complejas entre señales concurrentes
+- el backtesting evita look-ahead, pero sigue siendo una aproximacion EOD y no una simulacion
+  de microestructura o ejecucion institucional
 
 ## Ajustar parametros
 
@@ -266,6 +383,8 @@ Puedes afinar el comportamiento sin tocar codigo:
 - `config/risk_rules.yaml`: componentes de riesgo y umbrales
 - `config/portfolio_rules.yaml`: limites, targets y sizing base
 - `config/data_sources.yaml`: politica de cache, refresh y prioridad de providers
+- `config/backtesting.yaml`: reglas de entrada, salida y ejecucion
+- `config/optimization.yaml`: grids de parametros y score compuesto de evaluacion
 - `config/assets.yaml`: watchlist
 
 ## Tests y lint
@@ -279,5 +398,5 @@ python -m ruff check .
 
 - anadir fundamentales reales para acciones y ETFs
 - enriquecer la deteccion de soporte con clustering de pivots
-- anadir snapshots mas densos para backtesting historico serio
+- enriquecer el modo portfolio con mark-to-market diario y restricciones mas finas
 - incorporar metricas de acierto por recomendacion y por clase de activo

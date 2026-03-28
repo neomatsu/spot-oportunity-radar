@@ -1,0 +1,39 @@
+defaults:
+  mode: trade_by_trade
+  initial_capital: 100000
+  max_open_positions: 6
+  allow_overlapping_per_asset: false
+
+execution:
+  entry_mode: next_open
+  position_size_mode: suggested_weight_add
+  fixed_position_pct: 0.03
+  commission_bps: 8
+  slippage_bps: 5
+
+entry_rules:
+  min_final_score: 60
+  max_risk_score: 65
+  max_distance_to_support_pct: 6
+  max_rsi14: 65
+  require_bullish_trend: false
+  allowed_recommendations:
+    - BUY_CANDIDATE
+    - WATCH
+
+exit_rules:
+  strategy: hybrid
+  fixed_horizon_days: 20
+  max_holding_days: 40
+  take_profit_pct: 0.12
+  stop_loss_pct: 0.07
+  signal_loss_score_threshold: 45
+  invalidation_buffer_pct: 0.01
+
+evaluation:
+  train_ratio: 0.7
+  min_trades_warning_threshold: 8
+
+portfolio:
+  respect_sector_limits: false
+  respect_asset_type_limits: false
