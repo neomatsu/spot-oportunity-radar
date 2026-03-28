@@ -1,0 +1,440 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
+
+import pandas as pd
+
+from data.database import AssetDataStatusORM, AssetORM, DataRefreshLogORM, PriceBarDailyORM
+from data.providers.base_provider import ProviderError
+from services.market_data_service import MarketDataService
+
+
+class StubProvider:
+    def __init__(
+        self,
+        name: str,
+        frame: pd.DataFrame | None = None,
+        error: Exception | None = None,
+    ):
+        self.name = name
+        self.frame = frame if frame is not None else pd.DataFrame()
+        self.error = error
+        self.called = 0
+
+    def supports(self, asset: AssetORM) -> bool:
+        return True
+
+    def fetch_daily_prices(self, asset: AssetORM) -> pd.DataFrame:
+        self.called += 1
+        if self.error is not None:
+            raise self.error
+        return self.frame.copy()
+
+
+def make_asset(db_session, symbol: str = "TEST", asset_type: str = "stock") -> AssetORM:
+    asset = AssetORM(
+        symbol=symbol,
+        name=f"{symbol} Asset",
+        asset_type=asset_type,
+        sector="Technology" if asset_type != "crypto" else "Crypto",
+        region="US",
+        enabled=True,
+        supports_fundamentals=asset_type != "crypto",
+    )
+    db_session.add(asset)
+    db_session.flush()
+    return asset
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def make_service(
+    db_session,
+    provider: StubProvider,
+    *,
+    demo_mode: bool = True,
+    preserve_real_data_on_provider_failure: bool = True,
+) -> MarketDataService:
+    settings = SimpleNamespace(demo_mode=demo_mode)
+    data_config = SimpleNamespace(
+        prefer_cached_data=True,
+        refresh_on_app_start=False,
+        equities_refresh_interval_hours=24,
+        crypto_refresh_interval_minutes=180,
+        max_staleness_days=5,
+        allow_demo_fallback=True,
+        preserve_real_data_on_provider_failure=preserve_real_data_on_provider_failure,
+        providers_priority={"stock": ["stub"], "etf": ["stub"], "crypto": ["stub"]},
+    )
+    return MarketDataService(
+        db_session,
+        settings=settings,
+        data_config=data_config,
+        providers={"stub": provider},
+    )
+
+
+def test_cache_hit_skips_provider_call_when_data_is_fresh(db_session) -> None:
+    asset = make_asset(db_session)
+    db_session.add(
+        PriceBarDailyORM(
+            asset_id=asset.id,
+            date=date.today(),
+            open=10,
+            high=11,
+            low=9,
+            close=10.5,
+            volume=1000,
+        )
+    )
+    db_session.add(
+        AssetDataStatusORM(
+            asset_id=asset.id,
+            last_available_bar_date=date.today(),
+            last_successful_refresh_at=utc_now(),
+            last_refresh_status="success",
+            last_refresh_source="stub",
+            data_mode="real",
+            freshness_status="fresh",
+        )
+    )
+    db_session.flush()
+
+    provider = StubProvider("stub", frame=pd.DataFrame())
+    result = make_service(db_session, provider).refresh_daily_prices(asset)
+
+    assert result.status == "cache_hit"
+    assert provider.called == 0
+
+
+def test_cache_stale_refresh_ok_adds_only_new_rows(db_session) -> None:
+    asset = make_asset(db_session)
+    old_date = date.today() - timedelta(days=10)
+    new_date = date.today()
+    db_session.add(
+        PriceBarDailyORM(
+            asset_id=asset.id,
+            date=old_date,
+            open=10,
+            high=11,
+            low=9,
+            close=10.5,
+            volume=1000,
+        )
+    )
+    db_session.add(
+        AssetDataStatusORM(
+            asset_id=asset.id,
+            last_available_bar_date=old_date,
+            last_successful_refresh_at=utc_now() - timedelta(days=10),
+            last_refresh_status="success",
+            last_refresh_source="stub",
+            data_mode="real",
+            freshness_status="stale",
+        )
+    )
+    db_session.flush()
+
+    provider = StubProvider(
+        "stub",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": old_date,
+                    "open": 10,
+                    "high": 11,
+                    "low": 9,
+                    "close": 10.5,
+                    "volume": 1000,
+                },
+                {
+                    "date": new_date,
+                    "open": 12,
+                    "high": 13,
+                    "low": 11,
+                    "close": 12.5,
+                    "volume": 1500,
+                },
+            ]
+        ),
+    )
+
+    result = make_service(db_session, provider).refresh_daily_prices(asset)
+
+    assert result.status == "refreshed"
+    assert result.rows_stored == 1
+    assert provider.called == 1
+    prices = db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).all()
+    assert len(prices) == 2
+
+
+def test_cache_stale_refresh_failure_preserves_existing_real_data(db_session) -> None:
+    asset = make_asset(db_session)
+    old_date = date.today() - timedelta(days=6)
+    db_session.add(
+        PriceBarDailyORM(
+            asset_id=asset.id,
+            date=old_date,
+            open=10,
+            high=11,
+            low=9,
+            close=10.5,
+            volume=1000,
+        )
+    )
+    db_session.add(
+        AssetDataStatusORM(
+            asset_id=asset.id,
+            last_available_bar_date=old_date,
+            last_successful_refresh_at=utc_now() - timedelta(days=6),
+            last_refresh_status="success",
+            last_refresh_source="stub",
+            data_mode="real",
+            freshness_status="stale",
+        )
+    )
+    db_session.flush()
+
+    provider = StubProvider("stub", error=ProviderError("boom"))
+    result = make_service(db_session, provider).refresh_daily_prices(asset)
+
+    assert result.status == "preserved_cached_data"
+    assert result.data_mode == "real"
+    prices = db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).all()
+    assert len(prices) == 1
+
+
+def test_no_data_and_provider_failure_uses_demo_fallback_if_allowed(db_session) -> None:
+    asset = make_asset(db_session)
+    provider = StubProvider("stub", error=ProviderError("boom"))
+
+    result = make_service(db_session, provider).refresh_daily_prices(asset)
+
+    assert result.status == "demo_fallback"
+    assert result.provider_name == "demo"
+    assert result.data_mode == "demo"
+    assert db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).count() > 0
+
+
+def test_no_data_and_provider_success_persists_real_data(db_session) -> None:
+    asset = make_asset(db_session)
+    provider = StubProvider(
+        "stub",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": date.today() - timedelta(days=1),
+                    "open": 20,
+                    "high": 21,
+                    "low": 19,
+                    "close": 20.5,
+                    "volume": 2000,
+                }
+            ]
+        ),
+    )
+
+    result = make_service(db_session, provider).refresh_daily_prices(asset)
+
+    assert result.status == "refreshed"
+    assert result.data_mode == "real"
+    assert db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).count() == 1
+
+
+def test_demo_history_is_replaced_when_real_data_arrives(db_session) -> None:
+    asset = make_asset(db_session)
+    db_session.add(
+        PriceBarDailyORM(
+            asset_id=asset.id,
+            date=date.today() - timedelta(days=3),
+            open=400,
+            high=410,
+            low=390,
+            close=405,
+            volume=1000,
+        )
+    )
+    db_session.add(
+        AssetDataStatusORM(
+            asset_id=asset.id,
+            last_available_bar_date=date.today() - timedelta(days=3),
+            last_successful_refresh_at=utc_now() - timedelta(days=3),
+            last_refresh_status="demo_fallback",
+            last_refresh_source="demo",
+            data_mode="demo",
+            freshness_status="stale",
+        )
+    )
+    db_session.flush()
+
+    provider = StubProvider(
+        "stub",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": date.today() - timedelta(days=1),
+                    "open": 70,
+                    "high": 71,
+                    "low": 69,
+                    "close": 70.5,
+                    "volume": 2000,
+                }
+            ]
+        ),
+    )
+
+    result = make_service(db_session, provider).refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    assert result.data_mode == "real"
+    rows = db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).all()
+    assert len(rows) == 1
+    assert rows[0].close == 70.5
+
+
+def test_conflicting_latest_overlap_replaces_existing_history(db_session) -> None:
+    asset = make_asset(db_session)
+    conflicting_date = date.today() - timedelta(days=1)
+    db_session.add(
+        PriceBarDailyORM(
+            asset_id=asset.id,
+            date=conflicting_date,
+            open=430,
+            high=440,
+            low=420,
+            close=430,
+            volume=1000,
+        )
+    )
+    db_session.add(
+        AssetDataStatusORM(
+            asset_id=asset.id,
+            last_available_bar_date=conflicting_date,
+            last_successful_refresh_at=utc_now() - timedelta(days=1),
+            last_refresh_status="success",
+            last_refresh_source="alphavantage",
+            data_mode="real",
+            freshness_status="stale",
+        )
+    )
+    db_session.flush()
+
+    provider = StubProvider(
+        "stub",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": conflicting_date,
+                    "open": 75,
+                    "high": 76,
+                    "low": 74,
+                    "close": 76,
+                    "volume": 2000,
+                }
+            ]
+        ),
+    )
+
+    result = make_service(db_session, provider).refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    row = db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).one()
+    assert row.close == 76
+
+
+def test_duplicate_dates_are_not_inserted_twice(db_session) -> None:
+    asset = make_asset(db_session)
+    duplicate_date = date.today() - timedelta(days=1)
+    provider = StubProvider(
+        "stub",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": duplicate_date,
+                    "open": 20,
+                    "high": 21,
+                    "low": 19,
+                    "close": 20.5,
+                    "volume": 2000,
+                },
+                {
+                    "date": duplicate_date,
+                    "open": 20.1,
+                    "high": 21.1,
+                    "low": 19.1,
+                    "close": 20.6,
+                    "volume": 2100,
+                },
+            ]
+        ),
+    )
+
+    result = make_service(db_session, provider).refresh_daily_prices(asset)
+
+    assert result.status == "refreshed"
+    assert db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).count() == 1
+
+
+def test_market_data_service_skips_fmp_after_subscription_restriction(db_session) -> None:
+    asset = make_asset(db_session, symbol="ASML")
+    db_session.add(
+        DataRefreshLogORM(
+            asset_id=asset.id,
+            provider="fmp",
+            started_at=utc_now() - timedelta(hours=2),
+            finished_at=utc_now() - timedelta(hours=2),
+            status="provider_error",
+            rows_inserted=0,
+            error_message=(
+                "FMP subscription restriction for ASML: Premium Query Parameter: "
+                "Special Endpoint not available under your current subscription"
+            ),
+        )
+    )
+    db_session.flush()
+
+    fmp_provider = StubProvider("fmp", error=ProviderError("should not be called"))
+    alpha_provider = StubProvider(
+        "alphavantage",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": date.today() - timedelta(days=1),
+                    "open": 100,
+                    "high": 101,
+                    "low": 99,
+                    "close": 100.5,
+                    "volume": 1000,
+                }
+            ]
+        ),
+    )
+
+    settings = SimpleNamespace(demo_mode=True)
+    data_config = SimpleNamespace(
+        prefer_cached_data=False,
+        refresh_on_app_start=False,
+        equities_refresh_interval_hours=24,
+        crypto_refresh_interval_minutes=180,
+        max_staleness_days=5,
+        allow_demo_fallback=True,
+        preserve_real_data_on_provider_failure=True,
+        providers_priority={"stock": ["fmp", "alphavantage"], "etf": ["fmp"], "crypto": ["stub"]},
+    )
+
+    service = MarketDataService(
+        db_session,
+        settings=settings,
+        data_config=data_config,
+        providers={"fmp": fmp_provider, "alphavantage": alpha_provider},
+    )
+
+    result = service.refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    assert result.provider_name == "alphavantage"
+    assert fmp_provider.called == 0
+    assert alpha_provider.called == 1

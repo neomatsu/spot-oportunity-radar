@@ -1,0 +1,30 @@
+limits:
+  max_asset_weight: 0.12
+  max_sector_weight: 0.35
+  max_asset_type_weight:
+    stock: 0.65
+    etf: 0.55
+    crypto: 0.20
+  min_cash_target: 0.10
+
+targets:
+  stock: 0.45
+  etf: 0.35
+  crypto: 0.10
+  cash: 0.10
+
+portfolio_fit:
+  base_score: 55
+  asset_underweight_bonus: 14
+  asset_near_limit_penalty: 20
+  sector_underweight_bonus: 10
+  sector_overweight_penalty: 18
+  asset_type_underweight_bonus: 14
+  asset_type_overweight_penalty: 16
+  diversification_bonus: 8
+  low_cash_penalty: 14
+
+base_add_weights:
+  low: 0.05
+  medium: 0.03
+  high: 0.015

@@ -1,0 +1,169 @@
+assets:
+  - symbol: MSFT
+    name: Microsoft
+    asset_type: stock
+    sector: Technology
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: GOOGL
+    name: Alphabet
+    asset_type: stock
+    sector: Communication Services
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: AMZN
+    name: Amazon
+    asset_type: stock
+    sector: Consumer Discretionary
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: NVDA
+    name: Nvidia
+    asset_type: stock
+    sector: Technology
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: ASML
+    name: ASML
+    asset_type: stock
+    sector: Technology
+    region: EU
+    enabled: true
+    supports_fundamentals: true
+  - symbol: TSM
+    name: Taiwan Semiconductor
+    asset_type: stock
+    sector: Technology
+    region: APAC
+    enabled: true
+    supports_fundamentals: true
+  - symbol: SPY
+    name: SPDR S&P 500 ETF
+    asset_type: etf
+    sector: Broad Market
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: QQQ
+    name: Invesco QQQ Trust
+    asset_type: etf
+    sector: Broad Market
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: PPFB.DE
+    name: iShares Physical Gold ETC
+    asset_type: etf
+    sector: Commodities
+    region: EU
+    enabled: true
+    supports_fundamentals: false
+  - symbol: SXR8.DE
+    name: iShares Core S&P 500 UCITS ETF USD (Acc)
+    asset_type: etf
+    sector: Broad Market
+    region: EU
+    enabled: true
+    supports_fundamentals: true
+  - symbol: LCUJ.DE
+    name: Amundi MSCI Japan UCITS ETF
+    asset_type: etf
+    sector: Japan Equity
+    region: APAC
+    enabled: true
+    supports_fundamentals: true
+  - symbol: EXSA.DE
+    name: iShares STOXX Europe 600 UCITS ETF
+    asset_type: etf
+    sector: Europe Equity
+    region: EU
+    enabled: true
+    supports_fundamentals: true
+  - symbol: MCHI
+    name: iShares MSCI China ETF
+    asset_type: etf
+    sector: China Equity
+    region: APAC
+    enabled: true
+    supports_fundamentals: true
+  - symbol: WSML
+    name: iShares MSCI World Small Cap UCITS ETF
+    asset_type: etf
+    sector: Global Small Cap
+    region: Global
+    enabled: true
+    supports_fundamentals: true
+  - symbol: IJH
+    name: iShares Core S&P Mid-Cap ETF
+    asset_type: etf
+    sector: US Mid Cap
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: 10AM.DE
+    name: Amundi ETF 10AM
+    asset_type: etf
+    sector: Bonds
+    region: EU
+    enabled: true
+    supports_fundamentals: false
+  - symbol: IB28
+    name: iShares iBonds Dec 2028 Term ETF
+    asset_type: etf
+    sector: Bonds
+    region: EU
+    enabled: true
+    supports_fundamentals: false
+  - symbol: TLT
+    name: iShares 20+ Year Treasury Bond ETF
+    asset_type: etf
+    sector: Bonds
+    region: US
+    enabled: true
+    supports_fundamentals: false
+  - symbol: SHY
+    name: iShares 1-3 Year Treasury Bond ETF
+    asset_type: etf
+    sector: Bonds
+    region: US
+    enabled: true
+    supports_fundamentals: false
+  - symbol: BIL
+    name: SPDR Bloomberg 1-3 Month T-Bill ETF
+    asset_type: etf
+    sector: Bonds
+    region: US
+    enabled: true
+    supports_fundamentals: false
+  - symbol: FLOT
+    name: iShares Floating Rate Bond ETF
+    asset_type: etf
+    sector: Bonds
+    region: US
+    enabled: true
+    supports_fundamentals: false
+  - symbol: BTCUSDT
+    name: Bitcoin
+    asset_type: crypto
+    sector: Crypto
+    region: Global
+    enabled: true
+    supports_fundamentals: false
+  - symbol: ETHUSDT
+    name: Ethereum
+    asset_type: crypto
+    sector: Crypto
+    region: Global
+    enabled: true
+    supports_fundamentals: false
+  - symbol: SOLUSDT
+    name: Solana
+    asset_type: crypto
+    sector: Crypto
+    region: Global
+    enabled: true
+    supports_fundamentals: false

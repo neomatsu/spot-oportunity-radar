@@ -1,0 +1,16 @@
+prefer_cached_data: true
+refresh_on_app_start: false
+equities_refresh_interval_hours: 24
+crypto_refresh_interval_minutes: 180
+max_staleness_days: 5
+allow_demo_fallback: true
+preserve_real_data_on_provider_failure: true
+providers_priority:
+  stock:
+    - fmp
+    - alphavantage
+  etf:
+    - fmp
+    - alphavantage
+  crypto:
+    - binance

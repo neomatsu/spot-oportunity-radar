@@ -1,0 +1,30 @@
+components:
+  volatility_weight: 28
+  drawdown_weight: 24
+  concentration_weight: 20
+  asset_type_weight: 28
+
+volatility:
+  annualized_low: 0.18
+  annualized_high: 0.60
+
+drawdown:
+  moderate: 0.12
+  severe: 0.32
+
+concentration:
+  asset_overweight: 0.12
+  asset_max_penalty: 8
+  sector_overweight: 0.30
+  sector_max_penalty: 7
+  asset_type_overweight: 0.25
+  asset_type_max_penalty: 5
+
+asset_type_base_risk:
+  stock: 45
+  etf: 24
+  crypto: 72
+
+risk_level_thresholds:
+  low_max: 33
+  medium_max: 66

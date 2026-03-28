@@ -1,0 +1,45 @@
+weights:
+  technical_score: 0.50
+  inverted_risk_score: 0.25
+  portfolio_fit_score: 0.25
+
+technical:
+  max_score: 100
+  min_score: 0
+  rsi:
+    very_positive_max: 30
+    positive_max: 40
+    neutral_max: 60
+    negative_max: 70
+    scores:
+      very_positive: 28
+      positive: 22
+      neutral: 14
+      negative: 6
+      very_negative: 0
+  support_distance_pct:
+    very_positive_max: 2
+    positive_max: 5
+    neutral_max: 10
+    scores:
+      very_positive: 28
+      positive: 20
+      neutral: 10
+      negative: 2
+  trend_structure:
+    bullish_alignment_score: 24
+    constructive_score: 18
+    bearish_penalty: -14
+    below_sma200_penalty: -8
+  range_52w:
+    near_low_max_pct: 12
+    near_high_min_pct: 88
+    near_low_bonus: 12
+    mid_range_score: 7
+    near_high_penalty: -6
+
+recommendation_thresholds:
+  buy_candidate_min: 72
+  watch_min: 45
+  max_buy_candidate_risk_score: 68
+  max_watch_risk_score: 85
