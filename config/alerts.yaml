@@ -1,0 +1,32 @@
+rules:
+  min_score_for_entry_alert: 68
+  min_score_for_high_alert: 75
+  max_risk_for_actionable_alert: 60
+  min_score_for_watch_alert: 60
+  score_material_change_delta: 5
+  max_actionable_portfolio_fit_penalty: 40
+  require_buy_candidate_for_trade_intent: true
+  enable_watch_alerts: false
+  enable_risk_alerts: false
+  enable_data_alerts: false
+  enable_portfolio_alerts: false
+  min_minutes_between_duplicate_alerts: 180
+  cooldown_by_asset_minutes: 180
+  cooldown_by_alert_type_minutes:
+    entry_signal: 180
+    watch_signal: 360
+    risk_deterioration: 60
+    data_quality: 720
+    portfolio_constraint: 360
+  risk_deterioration_threshold: 75
+  stale_or_demo_blocks_trade_intent: true
+  preferred_universes_for_high_priority:
+    - etf
+    - stock
+  universe_overrides:
+    crypto:
+      min_score_for_entry_alert: 75
+      max_risk_for_actionable_alert: 45
+      enable_watch_alerts: false
+    etf:
+      min_score_for_entry_alert: 65

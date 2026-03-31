@@ -41,6 +41,9 @@ tests/         tests unitarios
   - `final_opportunity_score`
 - genera recomendaciones `BUY_CANDIDATE`, `WATCH` y `AVOID`
 - guarda snapshots tecnicos y senales con breakdown y rationale
+- detecta eventos operativos y genera alertas persistidas con deduplicacion
+- crea trade intents revisables cuando una senal supera umbrales y los datos son frescos/reales
+- permite envio por UI, consola y Telegram cuando esta configurado
 - muestra dashboard, watchlist, detalle de activo, cartera y backtesting ligero
 
 ## Instalacion
@@ -59,6 +62,9 @@ Variables principales:
 
 - `APP_DB_URL`: ruta SQLite local
 - `APP_DEMO_MODE=true|false`: activa el fallback demo
+- `APP_TELEGRAM_ENABLED=true|false`: activa el canal Telegram
+- `APP_TELEGRAM_BOT_TOKEN`: token del bot de Telegram
+- `APP_TELEGRAM_CHAT_ID`: chat id de destino para alertas
 - `ALPHAVANTAGE_API_KEY`: datos reales de acciones y ETFs si usas Alpha Vantage
 - `FMP_API_KEY`: datos reales de acciones y ETFs si usas FMP
 
@@ -159,6 +165,30 @@ Generacion de senales:
 python -m jobs.generate_signals
 ```
 
+Escaneo de eventos y generacion de alertas:
+
+```bash
+python -m jobs.check_market_events
+```
+
+Envio de alertas pendientes:
+
+```bash
+python -m jobs.send_alerts
+```
+
+Pipeline diario sencillo de senales + alertas:
+
+```bash
+python -m jobs.daily_signal_scan
+```
+
+Runner diario completo para ejecucion automatica sin Streamlit:
+
+```bash
+python -m jobs.daily_market_run
+```
+
 Arranque de Streamlit:
 
 ```bash
@@ -252,8 +282,218 @@ El tamano sugerido de posicion depende de:
 - `Watchlist`: filtros por tipo de activo, riesgo y recomendacion con color por fila, mas `data_mode`, `freshness_status` y `last_refresh_source`
 - `Asset Detail`: grafico con medias, soporte, RSI, breakdown del score, rationale, invalidation y estado de datos
 - `Portfolio`: exposicion por activo, sector y clase; alertas simples de concentracion
+- `Alerts`: alertas activas, historial, estado de envios y trade intents revisables
 - `Backtesting`: motor historico configurable con modos trade-by-trade y portfolio basico,
   reglas de salida, segmentacion, persistencia y grid search de parametros
+
+## Alertas y trade intents
+
+La fase actual no ejecuta brokers. Su objetivo es:
+
+- detectar eventos relevantes
+- filtrar ruido y deduplicar
+- notificar por canales configurables
+- preparar una propuesta operativa revisable
+
+### Tipos de alerta
+
+- `entry_signal`: nuevo setup accionable o entrada real en buy zone
+- `watch_signal`: setup interesante pero todavia incompleto
+- `risk_deterioration`: empeora recommendation o sube mucho el riesgo
+- `data_quality`: datos stale, demo o no ideales
+- `portfolio_constraint`: la cartera limita o bloquea la accion
+
+### Severidades
+
+- `info`
+- `warning`
+- `high`
+- `critical`
+
+### Deduplicacion y anti-spam
+
+Las alertas usan:
+
+- `dedupe_key` por activo + tipo
+- cooldown configurable por tipo de alerta
+- reenvio solo si cambia materialmente el score o la severidad
+
+Esto evita repetir mensajes como "sigue en BUY_CANDIDATE" si no ha cambiado nada relevante.
+
+### Trade intents
+
+Un `trade intent` es una propuesta operativa, no una orden real.
+
+Incluye:
+
+- activo y alerta origen
+- recommendation y scores
+- buy zone
+- peso sugerido y capital estimado
+- invalidacion
+- rationale y blockers de cartera/datos
+
+Estados soportados:
+
+- `new`
+- `reviewed`
+- `approved`
+- `rejected`
+- `expired`
+- `executed_manually`
+
+Se crea solo cuando, como minimo:
+
+- la senal es suficientemente fuerte
+- el riesgo esta dentro de limites
+- los datos estan `real` y `fresh`
+- el universo esta permitido
+- no hay bloqueos graves de cartera
+
+### Configuracion externa
+
+Las reglas viven en:
+
+- `config/alerts.yaml`
+- `config/notifications.yaml`
+- `config/execution_rules.yaml`
+
+Desde ahi puedes ajustar:
+
+- thresholds de score y riesgo
+- cooldowns y deduplicacion
+- severidad
+- universos prioritarios
+- canales activos
+- reglas de creacion de intents
+- sizing sugerido y expiracion
+
+### Telegram
+
+Si quieres activar Telegram:
+
+1. crea un bot y consigue el token
+2. identifica el `chat_id`
+3. configura en `.env`:
+
+```env
+APP_TELEGRAM_ENABLED=true
+APP_TELEGRAM_BOT_TOKEN=tu_token
+APP_TELEGRAM_CHAT_ID=tu_chat_id
+```
+
+Si faltan credenciales, el canal se desactiva de forma elegante y la app sigue funcionando.
+
+### Simplificaciones actuales
+
+- no hay ejecucion real en broker
+- no hay email en produccion, aunque la arquitectura deja preparado el servicio multicanal
+- los trade intents usan sizing estimado a partir de score, cash y reglas de cartera
+- el sistema prioriza calidad y trazabilidad sobre frecuencia de alertas
+
+## Ejecucion automatica diaria
+
+El proyecto ya puede ejecutarse automaticamente desde CLI sin tener la app abierta.
+
+### Que hace el runner
+
+`python -m jobs.daily_market_run` coordina:
+
+1. comprobacion basica de entorno y configuracion
+2. refresh de datos usando la capa cache-first ya existente
+3. recalculo de senales y recomendaciones
+4. deteccion de eventos y generacion de alertas
+5. envio de alertas pendientes por Telegram
+6. persistencia de un resumen de ejecucion
+
+La orquestacion reutiliza la logica actual. No depende de Streamlit.
+
+### Flags utiles
+
+```bash
+python -m jobs.daily_market_run --dry-run
+python -m jobs.daily_market_run --no-telegram
+python -m jobs.daily_market_run --only-refresh
+python -m jobs.daily_market_run --only-alerts
+python -m jobs.daily_market_run --force
+```
+
+Uso recomendado:
+
+- `--dry-run`: recorre el flujo pero no envia Telegram
+- `--no-telegram`: ejecuta todo salvo el envio final
+- `--only-refresh`: refresca datos y recalcula senales
+- `--only-alerts`: reutiliza los datos ya guardados y solo escanea/envia alertas
+- `--force`: fuerza refresh aunque haya cache reciente
+
+### Trazabilidad
+
+Cada ejecucion se registra en:
+
+- logs de consola / archivo si rediriges la salida
+- tabla `scheduled_job_runs` en SQLite
+
+El resumen guarda:
+
+- hora de inicio y fin
+- duracion
+- activos refrescados / cacheados / preservados
+- errores de refresh
+- senales generadas
+- alertas detectadas y deduplicadas
+- alerts sent / failed / skipped
+- estado final `success`, `partial_success` o `failed`
+
+### Configuracion
+
+La configuracion del runner vive en:
+
+- `config/scheduler.yaml`
+
+Parametros actuales:
+
+- hora recomendada de ejecucion
+- si se permite modo demo
+- si el refresh debe forzarse por defecto
+
+### Windows Task Scheduler
+
+Se incluye un script listo para Windows:
+
+- [run_daily_market_job.bat](C:/Personal/Workspace/spot-oportunity-radar/scripts/run_daily_market_job.bat)
+
+Ese script:
+
+- se mueve al root del proyecto
+- activa `.venv` si existe
+- ejecuta `python -m jobs.daily_market_run`
+- guarda la salida en `logs/`
+- devuelve el exit code correcto
+
+Comando recomendado en el Programador de tareas:
+
+- Programa/script:
+  `C:\Personal\Workspace\spot-oportunity-radar\scripts\run_daily_market_job.bat`
+
+Directorio de inicio recomendado:
+
+- `C:\Personal\Workspace\spot-oportunity-radar`
+
+### Hora recomendada
+
+Como el sistema trabaja con `daily bars`, una hora razonable para Espana es:
+
+- por la manana, por ejemplo `08:15 Europe/Madrid`, para revisar el estado general
+- o despues del cierre de USA si quieres priorizar el cierre diario norteamericano
+
+La configuracion por defecto documentada usa `08:15 Europe/Madrid`.
+
+### Manejo de errores
+
+- fallos parciales de provider no tumbaran necesariamente el runner
+- si falla Telegram, queda reflejado y el job puede acabar como `partial_success`
+- solo errores criticos de configuracion o ejecucion llevan a estado `failed`
+- el exit code es `0` para `success` y `partial_success`, y `1` para `failed`
 
 ## Backtesting
 

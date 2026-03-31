@@ -2,6 +2,8 @@ prefer_cached_data: true
 refresh_on_app_start: false
 equities_refresh_interval_hours: 24
 crypto_refresh_interval_minutes: 180
+equities_market_day_rollover_hour_local: 21
+equities_market_day_rollover_minute_local: 30
 max_staleness_days: 5
 allow_demo_fallback: true
 preserve_real_data_on_provider_failure: true

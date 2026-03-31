@@ -1,0 +1,22 @@
+defaults:
+  assumed_portfolio_value: 100000
+  intent_expiration_hours: 72
+  min_final_score_for_intent: 72
+  max_risk_score_for_intent: 55
+  min_portfolio_fit_score_for_intent: 45
+  allowed_universes:
+    - stock
+    - etf
+  allow_watch_intents: false
+
+sizing:
+  max_capital_per_intent_pct: 0.06
+  min_capital_per_intent_pct: 0.01
+  scale_down_if_existing_position: true
+  scale_down_if_low_cash: true
+
+constraints:
+  block_if_demo_or_stale: true
+  block_if_asset_over_limit: true
+  block_if_sector_over_limit: true
+  block_if_asset_type_over_limit: true

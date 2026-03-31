@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -498,6 +498,12 @@ class MarketDataService:
         if age_days > self.data_config.max_staleness_days:
             return FreshnessStatus.STALE.value
 
+        if asset.asset_type in {"stock", "etf"}:
+            current_local = datetime.now().replace(tzinfo=None)
+            if self._is_equity_data_fresh(latest_date, current_local):
+                return FreshnessStatus.FRESH.value
+            return FreshnessStatus.STALE.value
+
         if last_successful_refresh_at is not None:
             if utc_now() - last_successful_refresh_at <= self._refresh_interval(asset):
                 return FreshnessStatus.FRESH.value
@@ -525,7 +531,7 @@ class MarketDataService:
         if last_refresh_source == self.demo_provider.name:
             return True, "Existing history replaced after demo-to-real transition."
 
-        existing_frame = self.prices_repo.get_asset_prices(asset_id, limit=90)
+        existing_frame = self.prices_repo.get_asset_prices(asset_id)
         if existing_frame.empty:
             return False, None
 
@@ -553,6 +559,51 @@ class MarketDataService:
         if relative_diff > 0.25:
             return True, "Existing history replaced after conflicting overlap with real provider."
 
+        median_existing = float(merged["close_existing"].median())
+        median_real = float(merged["close_real"].median())
+        if median_real <= 0:
+            return False, None
+
+        median_relative_diff = abs(median_existing - median_real) / median_real
+        if median_relative_diff > 0.35:
+            return (
+                True,
+                "Existing history replaced after inconsistent scale versus real provider.",
+            )
+
+        merged["relative_diff"] = (
+            (merged["close_existing"] - merged["close_real"]).abs() / merged["close_real"]
+        )
+        anomaly_share = float((merged["relative_diff"] > 0.35).mean())
+        if len(merged) >= 30 and anomaly_share >= 0.02:
+            return (
+                True,
+                "Existing history replaced after detecting anomalous legacy rows.",
+            )
+
+        comparable_existing = existing_frame[
+            existing_frame["date"].between(
+                real_close_frame["date"].min(),
+                real_close_frame["date"].max(),
+            )
+        ].copy()
+        extra_existing_dates = set(comparable_existing["date"]) - set(real_close_frame["date"])
+        extra_date_share = (
+            len(extra_existing_dates) / len(comparable_existing)
+            if not comparable_existing.empty
+            else 0.0
+        )
+        if (
+            len(comparable_existing) >= 60
+            and len(extra_existing_dates) >= 3
+            and extra_date_share >= 0.01
+        ):
+            return (
+                True,
+                "Existing history replaced after detecting extra legacy dates not "
+                "present in real provider.",
+            )
+
         return False, None
 
     def _merge_data_mode(self, existing_mode: str | None, new_mode: str) -> str:
@@ -571,3 +622,18 @@ class MarketDataService:
 
     def _allow_demo_fallback(self) -> bool:
         return bool(self.settings.demo_mode and self.data_config.allow_demo_fallback)
+
+    def _is_equity_data_fresh(self, latest_date: date, current_local: datetime) -> bool:
+        return latest_date >= self._expected_equity_latest_date(current_local)
+
+    def _expected_equity_latest_date(self, current_local: datetime) -> date:
+        cutoff = time(
+            hour=self.data_config.equities_market_day_rollover_hour_local,
+            minute=self.data_config.equities_market_day_rollover_minute_local,
+        )
+        candidate = current_local.date()
+        if current_local.time() < cutoff:
+            candidate -= timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+        return candidate

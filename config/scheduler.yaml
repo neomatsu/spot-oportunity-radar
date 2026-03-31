@@ -1,0 +1,6 @@
+runner:
+  recommended_run_time: "08:15 Europe/Madrid"
+  default_force_refresh: false
+  allow_demo_mode: true
+  send_notifications_by_default: true
+  abort_on_critical_phase_failure: true

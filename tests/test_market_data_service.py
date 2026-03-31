@@ -64,6 +64,8 @@ def make_service(
         refresh_on_app_start=False,
         equities_refresh_interval_hours=24,
         crypto_refresh_interval_minutes=180,
+        equities_market_day_rollover_hour_local=21,
+        equities_market_day_rollover_minute_local=30,
         max_staleness_days=5,
         allow_demo_fallback=True,
         preserve_real_data_on_provider_failure=preserve_real_data_on_provider_failure,
@@ -378,6 +380,133 @@ def test_duplicate_dates_are_not_inserted_twice(db_session) -> None:
     assert db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).count() == 1
 
 
+def test_anomalous_legacy_rows_trigger_full_history_replacement(db_session) -> None:
+    asset = make_asset(db_session)
+    start_date = date.today() - timedelta(days=59)
+    provider_rows = []
+
+    for offset in range(60):
+        current_date = start_date + timedelta(days=offset)
+        real_close = 100 + offset
+        existing_close = real_close * 8 if offset in {10, 20, 30} else real_close
+        db_session.add(
+            PriceBarDailyORM(
+                asset_id=asset.id,
+                date=current_date,
+                open=existing_close,
+                high=existing_close + 1,
+                low=existing_close - 1,
+                close=existing_close,
+                volume=1000,
+            )
+        )
+        provider_rows.append(
+            {
+                "date": current_date,
+                "open": real_close,
+                "high": real_close + 1,
+                "low": real_close - 1,
+                "close": real_close,
+                "volume": 2000,
+            }
+        )
+
+    db_session.add(
+        AssetDataStatusORM(
+            asset_id=asset.id,
+            last_available_bar_date=start_date + timedelta(days=59),
+            last_successful_refresh_at=utc_now() - timedelta(days=1),
+            last_refresh_status="success",
+            last_refresh_source="alphavantage",
+            data_mode="real",
+            freshness_status="stale",
+        )
+    )
+    db_session.flush()
+
+    provider = StubProvider("stub", frame=pd.DataFrame(provider_rows))
+    result = make_service(db_session, provider).refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    refreshed_rows = (
+        db_session.query(PriceBarDailyORM)
+        .filter_by(asset_id=asset.id)
+        .order_by(PriceBarDailyORM.date.asc())
+        .all()
+    )
+    assert len(refreshed_rows) == 60
+    assert refreshed_rows[10].close == 110
+
+
+def test_extra_legacy_dates_trigger_full_history_replacement(db_session) -> None:
+    asset = make_asset(db_session)
+    start_date = date.today() - timedelta(days=99)
+    provider_rows = []
+    provider_dates = []
+
+    for offset in range(100):
+        current_date = start_date + timedelta(days=offset)
+        if offset in {5, 25, 45}:
+            continue
+        real_close = 200 + offset
+        provider_dates.append(current_date)
+        provider_rows.append(
+            {
+                "date": current_date,
+                "open": real_close,
+                "high": real_close + 1,
+                "low": real_close - 1,
+                "close": real_close,
+                "volume": 3000,
+            }
+        )
+        db_session.add(
+            PriceBarDailyORM(
+                asset_id=asset.id,
+                date=current_date,
+                open=real_close,
+                high=real_close + 1,
+                low=real_close - 1,
+                close=real_close,
+                volume=1000,
+            )
+        )
+
+    for extra_offset in {5, 25, 45}:
+        extra_date = start_date + timedelta(days=extra_offset)
+        db_session.add(
+            PriceBarDailyORM(
+                asset_id=asset.id,
+                date=extra_date,
+                open=1500,
+                high=1550,
+                low=1450,
+                close=1520,
+                volume=1000,
+            )
+        )
+
+    db_session.add(
+        AssetDataStatusORM(
+            asset_id=asset.id,
+            last_available_bar_date=provider_dates[-1],
+            last_successful_refresh_at=utc_now() - timedelta(days=1),
+            last_refresh_status="success",
+            last_refresh_source="alphavantage",
+            data_mode="real",
+            freshness_status="stale",
+        )
+    )
+    db_session.flush()
+
+    provider = StubProvider("stub", frame=pd.DataFrame(provider_rows))
+    result = make_service(db_session, provider).refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    refreshed_count = db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).count()
+    assert refreshed_count == len(provider_rows)
+
+
 def test_market_data_service_skips_fmp_after_subscription_restriction(db_session) -> None:
     asset = make_asset(db_session, symbol="ASML")
     db_session.add(
@@ -438,3 +567,25 @@ def test_market_data_service_skips_fmp_after_subscription_restriction(db_session
     assert result.provider_name == "alphavantage"
     assert fmp_provider.called == 0
     assert alpha_provider.called == 1
+
+
+def test_equity_freshness_is_stale_after_cutoff_without_same_day_bar(db_session) -> None:
+    make_asset(db_session, asset_type="stock")
+    provider = StubProvider("stub")
+    service = make_service(db_session, provider)
+
+    current_local = datetime(2026, 3, 30, 23, 0)
+    latest_date = date(2026, 3, 27)
+
+    assert service._is_equity_data_fresh(latest_date, current_local) is False
+
+
+def test_equity_freshness_is_fresh_before_cutoff_with_previous_business_day(db_session) -> None:
+    make_asset(db_session, asset_type="stock")
+    provider = StubProvider("stub")
+    service = make_service(db_session, provider)
+
+    current_local = datetime(2026, 3, 30, 8, 15)
+    latest_date = date(2026, 3, 27)
+
+    assert service._is_equity_data_fresh(latest_date, current_local) is True

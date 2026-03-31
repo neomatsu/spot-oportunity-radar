@@ -57,3 +57,12 @@ class SignalsRepository:
     def latest_signals(self) -> list[SignalORM]:
         statement = select(SignalORM).order_by(SignalORM.date.desc(), SignalORM.final_score.desc())
         return list(self.session.scalars(statement))
+
+    def latest_for_asset(self, asset_id: int, limit: int = 2) -> list[SignalORM]:
+        statement = (
+            select(SignalORM)
+            .where(SignalORM.asset_id == asset_id)
+            .order_by(SignalORM.date.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(statement))

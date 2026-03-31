@@ -146,6 +146,48 @@ assets:
     region: US
     enabled: true
     supports_fundamentals: false
+  - symbol: VWRL.LON
+    name: Vanguard FTSE All-World UCITS ETF
+    asset_type: etf
+    sector: Global Equity
+    region: Global
+    enabled: true
+    supports_fundamentals: true
+  - symbol: VWCE.DE
+    name: Vanguard FTSE All-World UCITS ETF USD (Acc)
+    asset_type: etf
+    sector: Global Equity
+    region: Global
+    enabled: true
+    supports_fundamentals: true
+  - symbol: EIMI.LON
+    name: iShares Core MSCI Emerging Markets IMI UCITS ETF
+    asset_type: etf
+    sector: Emerging Markets Equity
+    region: APAC
+    enabled: true
+    supports_fundamentals: true
+  - symbol: JPST
+    name: JPMorgan Ultra-Short Income ETF
+    asset_type: etf
+    sector: Bonds
+    region: US
+    enabled: true
+    supports_fundamentals: false
+  - symbol: IWM
+    name: iShares Russell 2000 ETF
+    asset_type: etf
+    sector: US Small Cap
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: SOXX
+    name: iShares Semiconductor ETF
+    asset_type: etf
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
   - symbol: BTCUSDT
     name: Bitcoin
     asset_type: crypto

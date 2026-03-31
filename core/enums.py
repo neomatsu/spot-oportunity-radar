@@ -32,3 +32,35 @@ class FreshnessStatus(StrEnum):
     FRESH = "fresh"
     STALE = "stale"
     MISSING = "missing"
+
+
+class AlertSeverity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class AlertStatus(StrEnum):
+    NEW = "new"
+    SENT = "sent"
+    ACKNOWLEDGED = "acknowledged"
+    RESOLVED = "resolved"
+    IGNORED = "ignored"
+
+
+class AlertType(StrEnum):
+    ENTRY_SIGNAL = "entry_signal"
+    WATCH_SIGNAL = "watch_signal"
+    RISK_DETERIORATION = "risk_deterioration"
+    DATA_QUALITY = "data_quality"
+    PORTFOLIO_CONSTRAINT = "portfolio_constraint"
+
+
+class TradeIntentStatus(StrEnum):
+    NEW = "new"
+    REVIEWED = "reviewed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    EXECUTED_MANUALLY = "executed_manually"

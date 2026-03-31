@@ -6,11 +6,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from core.enums import (
+    AlertSeverity,
+    AlertStatus,
+    AlertType,
     AssetType,
     DataMode,
     FreshnessStatus,
     RecommendationStatus,
     RiskLevel,
+    TradeIntentStatus,
 )
 
 
@@ -114,6 +118,8 @@ class DataSourcesConfigModel(BaseModel):
     refresh_on_app_start: bool = False
     equities_refresh_interval_hours: int = 24
     crypto_refresh_interval_minutes: int = 180
+    equities_market_day_rollover_hour_local: int = 21
+    equities_market_day_rollover_minute_local: int = 30
     max_staleness_days: int = 5
     allow_demo_fallback: bool = True
     preserve_real_data_on_provider_failure: bool = True
@@ -136,3 +142,40 @@ class AssetDataStatusModel(BaseModel):
     data_mode: DataMode = DataMode.UNKNOWN
     freshness_status: FreshnessStatus = FreshnessStatus.MISSING
     last_error_message: str | None = None
+
+
+class AlertModel(BaseModel):
+    asset_id: int | None = None
+    symbol: str
+    alert_type: AlertType
+    severity: AlertSeverity
+    title: str
+    message: str
+    payload_json: dict[str, Any] = Field(default_factory=dict)
+    status: AlertStatus = AlertStatus.NEW
+    delivery_channels: list[str] = Field(default_factory=list)
+    dedupe_key: str
+
+
+class MarketEventModel(BaseModel):
+    asset_id: int | None = None
+    symbol: str
+    event_type: str
+    event_payload: dict[str, Any] = Field(default_factory=dict)
+    processed: bool = False
+
+
+class TradeIntentModel(BaseModel):
+    asset_id: int
+    symbol: str
+    source_alert_id: int | None = None
+    status: TradeIntentStatus = TradeIntentStatus.NEW
+    recommendation: RecommendationStatus
+    final_score: float
+    risk_score: float
+    suggested_buy_low: float | None = None
+    suggested_buy_high: float | None = None
+    suggested_weight_add: float
+    suggested_capital: float
+    invalidation: str
+    rationale_json: dict[str, Any] = Field(default_factory=dict)

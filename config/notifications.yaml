@@ -1,0 +1,24 @@
+channels:
+  ui: true
+  telegram: true
+  console: true
+  email: false
+
+telegram:
+  enabled_for:
+    - info
+    - warning
+    - high
+    - critical
+  enabled_alert_types:
+    - entry_signal
+  send_entry_alerts: true
+  send_risk_alerts: false
+  send_data_alerts: false
+  send_watch_alerts: false
+  send_portfolio_alerts: false
+
+formatting:
+  include_buy_zone: true
+  include_invalidation: true
+  include_weight: true

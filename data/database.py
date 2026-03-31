@@ -59,6 +59,9 @@ class AssetORM(Base):
     data_status: Mapped[AssetDataStatusORM | None] = relationship(back_populates="asset")
     refresh_logs: Mapped[list[DataRefreshLogORM]] = relationship(back_populates="asset")
     backtest_trades: Mapped[list[BacktestTradeORM]] = relationship(back_populates="asset")
+    alerts: Mapped[list[AlertORM]] = relationship(back_populates="asset")
+    market_events: Mapped[list[MarketEventORM]] = relationship(back_populates="asset")
+    trade_intents: Mapped[list[TradeIntentORM]] = relationship(back_populates="asset")
 
 
 class PriceBarDailyORM(Base):
@@ -291,6 +294,96 @@ class BacktestTradeORM(Base):
     run: Mapped[BacktestRunORM] = relationship(back_populates="trades")
     parameter_set: Mapped[BacktestParameterSetORM | None] = relationship(back_populates="trades")
     asset: Mapped[AssetORM] = relationship(back_populates="backtest_trades")
+
+
+class AlertORM(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id"), nullable=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    alert_type: Mapped[str] = mapped_column(String(40), index=True)
+    severity: Mapped[str] = mapped_column(String(20), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    message: Mapped[str] = mapped_column(String(1000))
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="new")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    last_triggered_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_channels: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(160), index=True)
+
+    asset: Mapped[AssetORM | None] = relationship(back_populates="alerts")
+    notification_logs: Mapped[list[NotificationLogORM]] = relationship(back_populates="alert")
+    trade_intents: Mapped[list[TradeIntentORM]] = relationship(back_populates="source_alert")
+
+
+class MarketEventORM(Base):
+    __tablename__ = "market_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id"), nullable=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    event_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    processed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    asset: Mapped[AssetORM | None] = relationship(back_populates="market_events")
+
+
+class TradeIntentORM(Base):
+    __tablename__ = "trade_intents"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    source_alert_id: Mapped[int | None] = mapped_column(
+        ForeignKey("alerts.id"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(30), default="new")
+    recommendation: Mapped[str] = mapped_column(String(20))
+    final_score: Mapped[float] = mapped_column(Float)
+    risk_score: Mapped[float] = mapped_column(Float)
+    suggested_buy_low: Mapped[float | None] = mapped_column(Float, nullable=True)
+    suggested_buy_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    suggested_weight_add: Mapped[float] = mapped_column(Float, default=0.0)
+    suggested_capital: Mapped[float] = mapped_column(Float, default=0.0)
+    invalidation: Mapped[str] = mapped_column(String(500))
+    rationale_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    asset: Mapped[AssetORM] = relationship(back_populates="trade_intents")
+    source_alert: Mapped[AlertORM | None] = relationship(back_populates="trade_intents")
+
+
+class NotificationLogORM(Base):
+    __tablename__ = "notification_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    alert_id: Mapped[int | None] = mapped_column(ForeignKey("alerts.id"), nullable=True, index=True)
+    channel: Mapped[str] = mapped_column(String(40))
+    attempted_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    status: Mapped[str] = mapped_column(String(30))
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    alert: Mapped[AlertORM | None] = relationship(back_populates="notification_logs")
+
+
+class ScheduledJobRunORM(Base):
+    __tablename__ = "scheduled_job_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    job_name: Mapped[str] = mapped_column(String(120), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="running")
+    summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
 settings = get_settings()
