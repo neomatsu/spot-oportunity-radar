@@ -59,6 +59,9 @@ class AssetORM(Base):
     data_status: Mapped[AssetDataStatusORM | None] = relationship(back_populates="asset")
     refresh_logs: Mapped[list[DataRefreshLogORM]] = relationship(back_populates="asset")
     backtest_trades: Mapped[list[BacktestTradeORM]] = relationship(back_populates="asset")
+    backtest_portfolio_events: Mapped[list[BacktestPortfolioEventORM]] = relationship(
+        back_populates="asset"
+    )
     alerts: Mapped[list[AlertORM]] = relationship(back_populates="asset")
     market_events: Mapped[list[MarketEventORM]] = relationship(back_populates="asset")
     trade_intents: Mapped[list[TradeIntentORM]] = relationship(back_populates="asset")
@@ -294,6 +297,28 @@ class BacktestTradeORM(Base):
     run: Mapped[BacktestRunORM] = relationship(back_populates="trades")
     parameter_set: Mapped[BacktestParameterSetORM | None] = relationship(back_populates="trades")
     asset: Mapped[AssetORM] = relationship(back_populates="backtest_trades")
+
+
+class BacktestPortfolioEventORM(Base):
+    __tablename__ = "backtest_portfolio_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id"), index=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id"), nullable=True, index=True)
+    event_date: Mapped[date] = mapped_column(Date, index=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(30))
+    trigger_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    price: Mapped[float] = mapped_column(Float, default=0.0)
+    gross_value: Mapped[float] = mapped_column(Float, default=0.0)
+    cash_before: Mapped[float] = mapped_column(Float, default=0.0)
+    cash_after: Mapped[float] = mapped_column(Float, default=0.0)
+    position_weight_before: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_weight_after: Mapped[float | None] = mapped_column(Float, nullable=True)
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    asset: Mapped[AssetORM | None] = relationship(back_populates="backtest_portfolio_events")
 
 
 class AlertORM(Base):

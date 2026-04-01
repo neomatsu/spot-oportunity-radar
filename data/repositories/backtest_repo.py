@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from data.database import (
     BacktestMetricORM,
     BacktestParameterSetORM,
+    BacktestPortfolioEventORM,
     BacktestRunORM,
     BacktestTradeORM,
 )
@@ -35,6 +36,10 @@ class BacktestRepository:
 
     def add_trades(self, payloads: Iterable[dict]) -> None:
         self.session.add_all(BacktestTradeORM(**payload) for payload in payloads)
+        self.session.flush()
+
+    def add_portfolio_events(self, payloads: Iterable[dict]) -> None:
+        self.session.add_all(BacktestPortfolioEventORM(**payload) for payload in payloads)
         self.session.flush()
 
     def latest_runs(self, limit: int = 10) -> list[BacktestRunORM]:

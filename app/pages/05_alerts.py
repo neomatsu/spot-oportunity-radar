@@ -75,6 +75,7 @@ alerts_df = pd.DataFrame(
         {
             "id": alert.id,
             "symbol": alert.symbol,
+            "alert_group": (alert.payload_json or {}).get("alert_group", "other"),
             "alert_type": alert.alert_type,
             "severity": alert.severity,
             "title": alert.title,
@@ -107,6 +108,12 @@ intents_df = pd.DataFrame(
 alert_severity_options = (
     sorted(alerts_df["severity"].unique().tolist()) if not alerts_df.empty else []
 )
+alert_group_options = (
+    sorted(alerts_df["alert_group"].unique().tolist()) if not alerts_df.empty else []
+)
+alert_type_options = (
+    sorted(alerts_df["alert_type"].unique().tolist()) if not alerts_df.empty else []
+)
 alert_status_options = (
     sorted(alerts_df["status"].unique().tolist()) if not alerts_df.empty else []
 )
@@ -115,12 +122,23 @@ default_alert_statuses = [
 ]
 
 with tab_active:
-    severity_filter = st.multiselect(
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+    severity_filter = filter_col1.multiselect(
         "Filtrar severidad",
         options=alert_severity_options,
         default=alert_severity_options,
     )
-    status_filter = st.multiselect(
+    group_filter = filter_col2.multiselect(
+        "Filtrar grupo",
+        options=alert_group_options,
+        default=alert_group_options,
+    )
+    type_filter = filter_col3.multiselect(
+        "Filtrar tipo",
+        options=alert_type_options,
+        default=alert_type_options,
+    )
+    status_filter = filter_col4.multiselect(
         "Filtrar estado",
         options=alert_status_options,
         default=default_alert_statuses,
@@ -129,6 +147,10 @@ with tab_active:
     if not active_df.empty:
         if severity_filter:
             active_df = active_df[active_df["severity"].isin(severity_filter)]
+        if group_filter:
+            active_df = active_df[active_df["alert_group"].isin(group_filter)]
+        if type_filter:
+            active_df = active_df[active_df["alert_type"].isin(type_filter)]
         if status_filter:
             active_df = active_df[active_df["status"].isin(status_filter)]
         st.dataframe(active_df, use_container_width=True, hide_index=True)

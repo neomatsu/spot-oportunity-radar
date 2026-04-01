@@ -303,6 +303,16 @@ La fase actual no ejecuta brokers. Su objetivo es:
 - `data_quality`: datos stale, demo o no ideales
 - `portfolio_constraint`: la cartera limita o bloquea la accion
 
+Ademas, para posiciones ya abiertas en cartera, el sistema soporta alertas de gestion:
+
+- `overbought_warning`
+- `take_profit`
+- `trim_position`
+- `reduce_risk`
+- `exit_candidate`
+- `stop_loss_warning`
+- `rebalance_sell`
+
 ### Severidades
 
 - `info`
@@ -350,6 +360,34 @@ Se crea solo cuando, como minimo:
 - el universo esta permitido
 - no hay bloqueos graves de cartera
 
+### Alertas de gestion de posiciones
+
+Estas alertas se evalúan solo para activos con posicion abierta en la cartera manual.
+
+Su objetivo no es ejecutar ventas automaticas, sino ayudarte a gestionar:
+
+- posibles tomas de beneficios
+- reducciones parciales
+- rebalanceos por exceso de peso
+- deterioro tecnico relevante
+- cercania o ruptura de invalidacion
+
+Grupos logicos:
+
+- `entry`: oportunidades de entrada
+- `position_management`: gestion de posiciones abiertas
+- `risk`: deterioro o restricciones de cartera
+- `data`: problemas de calidad/frescura de datos
+
+Ejemplos de disparo:
+
+- `take_profit`: beneficio latente alto y extension tecnica
+- `trim_position`: peso actual muy por encima del objetivo o del maximo por activo
+- `reduce_risk`: riesgo elevado o perdida de SMA50
+- `exit_candidate`: recommendation `AVOID`, score muy bajo, riesgo alto o ruptura de soporte
+- `stop_loss_warning`: precio muy cerca o por debajo de invalidacion
+- `rebalance_sell`: activo sobreponderado aunque no este tecnicamente roto
+
 ### Configuracion externa
 
 Las reglas viven en:
@@ -367,6 +405,7 @@ Desde ahi puedes ajustar:
 - canales activos
 - reglas de creacion de intents
 - sizing sugerido y expiracion
+- thresholds de profit, RSI, rebalanceo y deterioro para alertas de venta/reduccion
 
 ### Telegram
 
@@ -383,6 +422,21 @@ APP_TELEGRAM_CHAT_ID=tu_chat_id
 ```
 
 Si faltan credenciales, el canal se desactiva de forma elegante y la app sigue funcionando.
+
+La seleccion de tipos enviados por Telegram se controla desde:
+
+- `config/notifications.yaml`
+
+Puedes mantener solo compras:
+
+- `enabled_alert_types: [entry_signal]`
+
+o ampliar con tipos de gestion como:
+
+- `take_profit`
+- `trim_position`
+- `exit_candidate`
+- `rebalance_sell`
 
 ### Simplificaciones actuales
 
@@ -515,6 +569,7 @@ El modulo `backtesting/` ahora esta separado en:
    - horizonte fijo
    - take profit / stop loss
    - perdida de señal
+   - alertas historicas de gestion de posicion reutilizando las reglas live
    - invalidacion
    - o una regla hibrida con primer evento
 4. Cada trade guarda:
@@ -531,6 +586,16 @@ El modulo `backtesting/` ahora esta separado en:
 - `trade_by_trade`: evalua cada señal de forma independiente
 - `portfolio`: version basica con capital inicial, cash, maximo de posiciones abiertas
   y sizing sencillo
+- `portfolio_realistic`: simulacion mas cercana al uso real de cartera
+  - parte de un capital inicial configurable
+  - compra con `suggested_weight_add` o con un override fijo
+  - mantiene cash disponible y cash minimo objetivo
+  - respeta limites por activo, sector y tipo cuando se activa
+  - permite ampliar posiciones existentes
+  - vende parcial o totalmente segun alertas reales de gestion (`take_profit`,
+    `reduce_risk`, `trim_position`, `exit_candidate`, `stop_loss_warning`,
+    `rebalance_sell`, `overbought_warning`)
+  - registra eventos `BUY`, `SELL_PARTIAL` y `SELL_FULL`
 
 ### Configuracion
 
@@ -550,7 +615,32 @@ Parametros configurables:
 - RSI maximo
 - exigir o no tendencia alcista de fondo
 - take profit, stop loss y horizonte
+- alertas de salida basadas en las mismas reglas operativas que el sistema live:
+  `take_profit`, `reduce_risk`, `exit_candidate`, `stop_loss_warning`,
+  `trim_position`, `rebalance_sell`, `overbought_warning`
+- capital inicial, cash minimo y limites de cartera para simulacion realista
+- porcentaje de venta por tipo de alerta para recortes parciales o salidas completas
 - criterio compuesto de evaluacion en optimizacion
+
+### Simulacion de cartera realista
+
+Este modo intenta parecerse mas al uso real de la app:
+
+1. parte de un capital inicial configurable
+2. compra solo cuando aparece una señal de entrada valida
+3. si `use_suggested_weight_add` esta activo, usa el peso sugerido por la señal
+4. si no, usa un override fijo de compra
+5. mantiene cash disponible y puede reservar un minimo de cash objetivo
+6. cuando salta una alerta de gestion sobre una posicion abierta, aplica el
+   porcentaje de venta configurado para ese tipo de alerta
+7. si una alerta fuerte como `exit_candidate` o `stop_loss_warning` coincide con
+   otras menores, se aplica la prioridad configurada
+
+Limitaciones:
+
+- sigue siendo una simulacion EOD, no intradiaria
+- la venta parcial usa reglas simples y una prioridad unica por dia/activo
+- el sizing y las restricciones de cartera son razonables, pero no institucionales
 
 ### Metricas
 

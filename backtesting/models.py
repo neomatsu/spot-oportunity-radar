@@ -9,6 +9,7 @@ from typing import Any
 class BacktestMode(StrEnum):
     TRADE_BY_TRADE = "trade_by_trade"
     PORTFOLIO = "portfolio"
+    PORTFOLIO_REALISTIC = "portfolio_realistic"
 
 
 class EntryMode(StrEnum):
@@ -21,6 +22,8 @@ class ExitStrategy(StrEnum):
     TAKE_PROFIT_STOP_LOSS = "take_profit_stop_loss"
     SIGNAL_LOSS = "signal_loss"
     HYBRID = "hybrid"
+    POSITION_ALERTS = "position_alerts"
+    HYBRID_POSITION_ALERTS = "hybrid_position_alerts"
 
 
 class PositionSizeMode(StrEnum):
@@ -48,6 +51,7 @@ class ExitRules:
     stop_loss_pct: float | None
     signal_loss_score_threshold: float | None
     invalidation_buffer_pct: float
+    position_alert_exit_types: tuple[str, ...]
 
 
 @dataclass(slots=True)
@@ -66,6 +70,22 @@ class EvaluationRules:
 
 
 @dataclass(slots=True)
+class PortfolioSimulationRules:
+    cash_min_target_pct: float
+    max_asset_weight: float
+    max_sector_weight: float
+    max_asset_type_weight: dict[str, float]
+    apply_portfolio_limits: bool
+    allow_add_to_existing: bool
+    use_suggested_weight_add: bool
+    buy_weight_override_pct: float | None
+    min_trade_value: float
+    min_residual_position_value: float
+    sell_reduction_by_alert_type: dict[str, float]
+    sell_priority: tuple[str, ...]
+
+
+@dataclass(slots=True)
 class BacktestScenario:
     name: str
     mode: BacktestMode
@@ -81,6 +101,7 @@ class BacktestScenario:
     exit_rules: ExitRules
     execution_rules: ExecutionRules
     evaluation_rules: EvaluationRules
+    portfolio_simulation_rules: PortfolioSimulationRules
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -110,6 +131,7 @@ class BacktestScenario:
                 "stop_loss_pct": self.exit_rules.stop_loss_pct,
                 "signal_loss_score_threshold": self.exit_rules.signal_loss_score_threshold,
                 "invalidation_buffer_pct": self.exit_rules.invalidation_buffer_pct,
+                "position_alert_exit_types": list(self.exit_rules.position_alert_exit_types),
             },
             "execution_rules": {
                 "entry_mode": self.execution_rules.entry_mode.value,
@@ -121,6 +143,26 @@ class BacktestScenario:
             "evaluation_rules": {
                 "train_ratio": self.evaluation_rules.train_ratio,
                 "min_trades_warning_threshold": self.evaluation_rules.min_trades_warning_threshold,
+            },
+            "portfolio_simulation_rules": {
+                "cash_min_target_pct": self.portfolio_simulation_rules.cash_min_target_pct,
+                "max_asset_weight": self.portfolio_simulation_rules.max_asset_weight,
+                "max_sector_weight": self.portfolio_simulation_rules.max_sector_weight,
+                "max_asset_type_weight": self.portfolio_simulation_rules.max_asset_type_weight,
+                "apply_portfolio_limits": self.portfolio_simulation_rules.apply_portfolio_limits,
+                "allow_add_to_existing": self.portfolio_simulation_rules.allow_add_to_existing,
+                "use_suggested_weight_add": (
+                    self.portfolio_simulation_rules.use_suggested_weight_add
+                ),
+                "buy_weight_override_pct": self.portfolio_simulation_rules.buy_weight_override_pct,
+                "min_trade_value": self.portfolio_simulation_rules.min_trade_value,
+                "min_residual_position_value": (
+                    self.portfolio_simulation_rules.min_residual_position_value
+                ),
+                "sell_reduction_by_alert_type": (
+                    self.portfolio_simulation_rules.sell_reduction_by_alert_type
+                ),
+                "sell_priority": list(self.portfolio_simulation_rules.sell_priority),
             },
         }
 
@@ -139,6 +181,7 @@ class HistoricalSignal:
     final_score: float
     recommendation: str
     rsi14: float | None
+    sma50: float | None
     distance_to_support_pct: float | None
     support_low: float | None
     support_high: float | None
@@ -243,6 +286,9 @@ class BacktestRunResult:
     segmented_metrics: dict[str, dict[str, StrategyMetrics]]
     equity_curve: list[dict[str, Any]]
     warnings: list[str]
+    cash_curve: list[dict[str, Any]] = field(default_factory=list)
+    portfolio_events: list[dict[str, Any]] = field(default_factory=list)
+    portfolio_summary: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

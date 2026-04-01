@@ -12,6 +12,7 @@ from backtesting.models import (
     ExecutionRules,
     ExitRules,
     ExitStrategy,
+    PortfolioSimulationRules,
     PositionSizeMode,
 )
 from core.config import load_yaml_config
@@ -38,6 +39,7 @@ def default_backtest_scenario(
     exit_rules = config["exit_rules"]
     evaluation = config["evaluation"]
     portfolio = config["portfolio"]
+    portfolio_sim = config.get("portfolio_simulation", {})
 
     default_end = end_date or date.today()
     default_start = start_date or (default_end - timedelta(days=365 * 2))
@@ -73,6 +75,7 @@ def default_backtest_scenario(
                 exit_rules.get("signal_loss_score_threshold")
             ),
             invalidation_buffer_pct=float(exit_rules["invalidation_buffer_pct"]),
+            position_alert_exit_types=tuple(exit_rules.get("position_alert_exit_types", [])),
         ),
         execution_rules=ExecutionRules(
             entry_mode=EntryMode(execution["entry_mode"]),
@@ -85,6 +88,46 @@ def default_backtest_scenario(
             train_ratio=float(evaluation["train_ratio"]),
             min_trades_warning_threshold=int(evaluation["min_trades_warning_threshold"]),
         ),
+        portfolio_simulation_rules=PortfolioSimulationRules(
+            cash_min_target_pct=float(portfolio_sim.get("cash_min_target_pct", 0.1)),
+            max_asset_weight=float(
+                portfolio_sim.get("max_asset_weight", portfolio["max_asset_weight"])
+            ),
+            max_sector_weight=float(
+                portfolio_sim.get("max_sector_weight", portfolio["max_sector_weight"])
+            ),
+            max_asset_type_weight=dict(
+                portfolio_sim.get(
+                    "max_asset_type_weight",
+                    portfolio["max_asset_type_weight"],
+                )
+            ),
+            apply_portfolio_limits=bool(portfolio_sim.get("apply_portfolio_limits", True)),
+            allow_add_to_existing=bool(portfolio_sim.get("allow_add_to_existing", True)),
+            use_suggested_weight_add=bool(portfolio_sim.get("use_suggested_weight_add", True)),
+            buy_weight_override_pct=_optional_float(portfolio_sim.get("buy_weight_override_pct")),
+            min_trade_value=float(portfolio_sim.get("min_trade_value", 250.0)),
+            min_residual_position_value=float(
+                portfolio_sim.get("min_residual_position_value", 150.0)
+            ),
+            sell_reduction_by_alert_type=dict(
+                portfolio_sim.get("sell_reduction_by_alert_type", {})
+            ),
+            sell_priority=tuple(
+                portfolio_sim.get(
+                    "sell_priority",
+                    [
+                        "stop_loss_warning",
+                        "exit_candidate",
+                        "reduce_risk",
+                        "trim_position",
+                        "take_profit",
+                        "rebalance_sell",
+                        "overbought_warning",
+                    ],
+                )
+            ),
+        ),
     )
 
 
@@ -96,6 +139,7 @@ def scenario_with_overrides(
     entry_overrides: dict[str, Any] | None = None,
     exit_overrides: dict[str, Any] | None = None,
     execution_overrides: dict[str, Any] | None = None,
+    portfolio_simulation_overrides: dict[str, Any] | None = None,
 ) -> BacktestScenario:
     entry = {
         "min_final_score": base.entry_rules.min_final_score,
@@ -115,6 +159,7 @@ def scenario_with_overrides(
         "stop_loss_pct": base.exit_rules.stop_loss_pct,
         "signal_loss_score_threshold": base.exit_rules.signal_loss_score_threshold,
         "invalidation_buffer_pct": base.exit_rules.invalidation_buffer_pct,
+        "position_alert_exit_types": base.exit_rules.position_alert_exit_types,
     }
     exit_payload.update(exit_overrides or {})
 
@@ -126,6 +171,25 @@ def scenario_with_overrides(
         "slippage_bps": base.execution_rules.slippage_bps,
     }
     execution.update(execution_overrides or {})
+    portfolio_sim = {
+        "cash_min_target_pct": base.portfolio_simulation_rules.cash_min_target_pct,
+        "max_asset_weight": base.portfolio_simulation_rules.max_asset_weight,
+        "max_sector_weight": base.portfolio_simulation_rules.max_sector_weight,
+        "max_asset_type_weight": base.portfolio_simulation_rules.max_asset_type_weight,
+        "apply_portfolio_limits": base.portfolio_simulation_rules.apply_portfolio_limits,
+        "allow_add_to_existing": base.portfolio_simulation_rules.allow_add_to_existing,
+        "use_suggested_weight_add": base.portfolio_simulation_rules.use_suggested_weight_add,
+        "buy_weight_override_pct": base.portfolio_simulation_rules.buy_weight_override_pct,
+        "min_trade_value": base.portfolio_simulation_rules.min_trade_value,
+        "min_residual_position_value": (
+            base.portfolio_simulation_rules.min_residual_position_value
+        ),
+        "sell_reduction_by_alert_type": (
+            base.portfolio_simulation_rules.sell_reduction_by_alert_type
+        ),
+        "sell_priority": base.portfolio_simulation_rules.sell_priority,
+    }
+    portfolio_sim.update(portfolio_simulation_overrides or {})
 
     return BacktestScenario(
         name=name or base.name,
@@ -160,6 +224,7 @@ def scenario_with_overrides(
                 exit_payload["signal_loss_score_threshold"]
             ),
             invalidation_buffer_pct=float(exit_payload["invalidation_buffer_pct"]),
+            position_alert_exit_types=tuple(exit_payload["position_alert_exit_types"]),
         ),
         execution_rules=ExecutionRules(
             entry_mode=(
@@ -177,6 +242,20 @@ def scenario_with_overrides(
             slippage_bps=float(execution["slippage_bps"]),
         ),
         evaluation_rules=base.evaluation_rules,
+        portfolio_simulation_rules=PortfolioSimulationRules(
+            cash_min_target_pct=float(portfolio_sim["cash_min_target_pct"]),
+            max_asset_weight=float(portfolio_sim["max_asset_weight"]),
+            max_sector_weight=float(portfolio_sim["max_sector_weight"]),
+            max_asset_type_weight=dict(portfolio_sim["max_asset_type_weight"]),
+            apply_portfolio_limits=bool(portfolio_sim["apply_portfolio_limits"]),
+            allow_add_to_existing=bool(portfolio_sim["allow_add_to_existing"]),
+            use_suggested_weight_add=bool(portfolio_sim["use_suggested_weight_add"]),
+            buy_weight_override_pct=_optional_float(portfolio_sim["buy_weight_override_pct"]),
+            min_trade_value=float(portfolio_sim["min_trade_value"]),
+            min_residual_position_value=float(portfolio_sim["min_residual_position_value"]),
+            sell_reduction_by_alert_type=dict(portfolio_sim["sell_reduction_by_alert_type"]),
+            sell_priority=tuple(portfolio_sim["sell_priority"]),
+        ),
     )
 
 

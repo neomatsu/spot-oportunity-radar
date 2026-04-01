@@ -45,6 +45,8 @@ def run_result_to_frames(result: BacktestRunResult) -> dict[str, pd.DataFrame]:
         ]
     )
     equity_frame = pd.DataFrame(result.equity_curve)
+    cash_frame = pd.DataFrame(result.cash_curve)
+    portfolio_events_frame = pd.DataFrame(result.portfolio_events)
     segment_frames = {
         segment: metrics_to_frame(metrics_map)
         for segment, metrics_map in result.segmented_metrics.items()
@@ -52,6 +54,8 @@ def run_result_to_frames(result: BacktestRunResult) -> dict[str, pd.DataFrame]:
     return {
         "trades": trades_frame,
         "equity": equity_frame,
+        "cash": cash_frame,
+        "portfolio_events": portfolio_events_frame,
         **{f"segment_{segment}": frame for segment, frame in segment_frames.items()},
     }
 

@@ -80,3 +80,38 @@ def test_telegram_can_filter_exact_alert_types() -> None:
     telegram_result = next(result for result in results if result.channel == "telegram")
 
     assert telegram_result.status == "skipped"
+
+
+def test_telegram_can_send_take_profit_when_type_is_allowed(monkeypatch) -> None:
+    service = NotificationService()
+    service.config["channels"]["telegram"] = True
+    service.settings.telegram_enabled = True
+    service.settings.telegram_bot_token = "token"
+    service.settings.telegram_chat_id = "chat-id"
+    service.config["telegram"]["enabled_for"] = ["high"]
+    service.config["telegram"]["enabled_alert_types"] = ["take_profit"]
+
+    sent_payload: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+    def _fake_post(url, json, timeout):
+        sent_payload["url"] = url
+        sent_payload["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("services.notification_service.httpx.post", _fake_post)
+    alert = _build_alert()
+    alert.alert_type = "take_profit"
+    alert.payload_json["profit_pct"] = 22.4
+    alert.payload_json["current_weight_pct"] = 14.0
+    alert.payload_json["target_weight_pct"] = 8.0
+    alert.payload_json["action_suggestion"] = "Valorar toma parcial"
+
+    results = service.send_alert(alert)
+    telegram_result = next(result for result in results if result.channel == "telegram")
+
+    assert telegram_result.status == "sent"
+    assert "take_profit" in sent_payload["json"]["text"]

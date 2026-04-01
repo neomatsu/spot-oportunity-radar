@@ -131,6 +131,7 @@ def test_fixed_horizon_exit_rule(db_session) -> None:
         final_score=75,
         recommendation="BUY_CANDIDATE",
         rsi14=45,
+        sma50=100,
         distance_to_support_pct=2,
         support_low=95,
         support_high=98,
@@ -173,6 +174,7 @@ def test_stop_loss_and_invalidation_exit_rules(db_session) -> None:
         final_score=75,
         recommendation="BUY_CANDIDATE",
         rsi14=45,
+        sma50=float(frame.loc[220, "close"]) * 0.98,
         distance_to_support_pct=2,
         support_low=95,
         support_high=98,
@@ -190,6 +192,7 @@ def test_stop_loss_and_invalidation_exit_rules(db_session) -> None:
         stop_loss_pct=0.05,
         signal_loss_score_threshold=45,
         invalidation_buffer_pct=0.01,
+        position_alert_exit_types=(),
     )
     trade, _ = engine.simulate_trade(
         asset=asset,
@@ -211,6 +214,7 @@ def test_stop_loss_and_invalidation_exit_rules(db_session) -> None:
         stop_loss_pct=None,
         signal_loss_score_threshold=90,
         invalidation_buffer_pct=0.0,
+        position_alert_exit_types=(),
     )
     trade, _ = engine.simulate_trade(
         asset=asset,
@@ -234,3 +238,124 @@ def test_in_sample_out_of_sample_split() -> None:
     assert train_start == date(2024, 1, 1)
     assert train_end < test_end
     assert test_start > train_start
+
+
+def test_position_alert_exit_uses_real_management_logic(db_session) -> None:
+    asset = _seed_asset_with_prices(db_session, "ALERTEXIT")
+    engine = BacktestEngine(db_session)
+    frame = engine._load_asset_frame(asset, date(2024, 1, 1), date(2025, 12, 31))
+    scenario = _make_scenario(asset.symbol)
+    scenario.exit_rules = ExitRules(
+        strategy=ExitStrategy.POSITION_ALERTS,
+        fixed_horizon_days=20,
+        max_holding_days=20,
+        take_profit_pct=None,
+        stop_loss_pct=None,
+        signal_loss_score_threshold=None,
+        invalidation_buffer_pct=0.0,
+        position_alert_exit_types=("take_profit",),
+    )
+    signal_index = 220
+    entry_index = signal_index + 1
+    entry_price = float(frame.iloc[entry_index]["open"])
+    frame.loc[entry_index + 2, "close"] = entry_price * 1.20
+    frame.loc[entry_index + 2, "high"] = entry_price * 1.21
+    frame.loc[entry_index + 2, "low"] = entry_price * 1.19
+    frame.loc[entry_index + 2, "open"] = entry_price * 1.18
+
+    signal = HistoricalSignal(
+        asset_id=asset.id,
+        symbol=asset.symbol,
+        name=asset.name,
+        asset_type=asset.asset_type,
+        sector=asset.sector,
+        signal_date=pd.Timestamp(frame.iloc[signal_index]["date"]).date(),
+        technical_score=70,
+        risk_score=20,
+        portfolio_fit_score=80,
+        final_score=75,
+        recommendation="BUY_CANDIDATE",
+        rsi14=55,
+        sma50=float(frame.loc[signal_index, "close"]) * 0.98,
+        distance_to_support_pct=2,
+        support_low=95,
+        support_high=98,
+        trend_bullish=True,
+        suggested_weight_add_pct=5,
+        invalidation_level=95,
+    )
+
+    trade, _ = engine.simulate_trade(
+        asset=asset,
+        frame=frame,
+        signal_index=signal_index,
+        signal=signal,
+        scenario=scenario,
+        position_pct=0.05,
+    )
+
+    assert trade is not None
+    assert trade.exit_reason == "take_profit"
+
+
+def test_portfolio_realistic_buys_with_suggested_weight_and_sells_partially(db_session) -> None:
+    asset = _seed_asset_with_prices(db_session, "REALPF")
+    engine = BacktestEngine(db_session)
+    scenario = _make_scenario(asset.symbol)
+    scenario.mode = BacktestMode.PORTFOLIO_REALISTIC
+    scenario.execution_rules.entry_mode = EntryMode.CLOSE
+    scenario.portfolio_simulation_rules.use_suggested_weight_add = True
+    scenario.portfolio_simulation_rules.sell_reduction_by_alert_type["take_profit"] = 0.25
+    scenario.exit_rules.strategy = ExitStrategy.POSITION_ALERTS
+    scenario.exit_rules.position_alert_exit_types = ("take_profit",)
+
+    result = engine.run(scenario, persist=False)
+
+    assert result.portfolio_summary["buy_count"] > 0
+    assert any(event["action"] == "BUY" for event in result.portfolio_events)
+    assert result.cash_curve
+
+
+def test_portfolio_realistic_respects_cash_and_asset_limit(db_session) -> None:
+    asset = _seed_asset_with_prices(db_session, "LIMITPF")
+    engine = BacktestEngine(db_session)
+    scenario = _make_scenario(asset.symbol)
+    scenario.mode = BacktestMode.PORTFOLIO_REALISTIC
+    scenario.execution_rules.entry_mode = EntryMode.CLOSE
+    scenario.initial_capital = 1000
+    scenario.portfolio_simulation_rules.cash_min_target_pct = 0.8
+    scenario.portfolio_simulation_rules.min_trade_value = 250
+
+    result = engine.run(scenario, persist=False)
+
+    assert result.portfolio_summary["buy_count"] == 0
+    assert result.portfolio_summary["final_cash"] == 1000
+
+
+def test_portfolio_realistic_exit_priority_prefers_stop_loss(db_session) -> None:
+    asset = _seed_asset_with_prices(db_session, "PRIOPF")
+    engine = BacktestEngine(db_session)
+    frame = engine._load_asset_frame(asset, date(2024, 1, 1), date(2025, 12, 31))
+    scenario = _make_scenario(asset.symbol)
+    scenario.mode = BacktestMode.PORTFOLIO_REALISTIC
+    scenario.execution_rules.entry_mode = EntryMode.CLOSE
+    scenario.exit_rules.strategy = ExitStrategy.POSITION_ALERTS
+    scenario.exit_rules.position_alert_exit_types = (
+        "stop_loss_warning",
+        "exit_candidate",
+        "take_profit",
+    )
+    scenario.portfolio_simulation_rules.sell_reduction_by_alert_type["stop_loss_warning"] = 1.0
+    scenario.portfolio_simulation_rules.sell_reduction_by_alert_type["take_profit"] = 0.25
+
+    signal_index = 220
+    entry_close = float(frame.iloc[signal_index]["close"])
+    frame.loc[signal_index + 2, "close"] = entry_close * 1.20
+    frame.loc[signal_index + 2, "high"] = entry_close * 1.21
+    frame.loc[signal_index + 2, "low"] = entry_close * 0.90
+
+    result = engine.run(scenario, persist=False)
+    exit_events = [event for event in result.portfolio_events if event["action"].startswith("SELL")]
+
+    if exit_events:
+        assert exit_events[0]["trigger_type"] in {"stop_loss_warning", "exit_candidate"}

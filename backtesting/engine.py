@@ -20,6 +20,10 @@ from data.database import AssetORM
 from data.repositories.assets_repo import AssetsRepository
 from data.repositories.backtest_repo import BacktestRepository
 from data.repositories.prices_repo import PricesRepository
+from services.position_management_alerts_service import (
+    PositionContext,
+    PositionManagementAlertsService,
+)
 from services.rebalance_service import RebalanceService
 from services.recommendation_service import RecommendationService
 from services.risk_service import RiskService
@@ -42,6 +46,7 @@ class BacktestEngine:
         self.scoring_service = ScoringService()
         self.rebalance_service = RebalanceService()
         self.recommendation_service = RecommendationService()
+        self.position_management_alerts_service = PositionManagementAlertsService()
 
     def run(
         self,
@@ -55,15 +60,28 @@ class BacktestEngine:
             asset.id: self._load_asset_frame(asset, scenario.start_date, scenario.end_date)
             for asset in assets
         }
+        portfolio_events: list[dict[str, Any]] = []
+        portfolio_summary: dict[str, Any] = {}
+        cash_curve: list[dict[str, Any]] = []
+        equity_curve: list[dict[str, Any]] = []
 
-        if scenario.mode == BacktestMode.PORTFOLIO:
+        if scenario.mode == BacktestMode.PORTFOLIO_REALISTIC:
+            (
+                trades,
+                portfolio_events,
+                equity_curve,
+                cash_curve,
+                portfolio_summary,
+            ) = self._run_portfolio_realistic_mode(assets, frames, scenario)
+        elif scenario.mode == BacktestMode.PORTFOLIO:
             trades = self._run_portfolio_mode(assets, frames, scenario)
         else:
             trades = self._run_trade_by_trade_mode(assets, frames, scenario)
 
         metrics = summarize_trades(trades, initial_capital=scenario.initial_capital)
         segmented = segment_trades(trades, initial_capital=scenario.initial_capital)
-        equity_curve = compute_equity_curve(trades, initial_capital=scenario.initial_capital)
+        if not equity_curve:
+            equity_curve = compute_equity_curve(trades, initial_capital=scenario.initial_capital)
         warnings = self._build_warnings(metrics.total_trades, scenario)
 
         run_id: int | None = None
@@ -74,6 +92,8 @@ class BacktestEngine:
                 trades,
                 metrics.to_dict(),
                 segmented,
+                portfolio_events=portfolio_events,
+                portfolio_summary=portfolio_summary,
                 run_name=run_name or scenario.name,
             )
 
@@ -86,6 +106,9 @@ class BacktestEngine:
             segmented_metrics=segmented,
             equity_curve=equity_curve,
             warnings=warnings,
+            cash_curve=cash_curve,
+            portfolio_events=portfolio_events,
+            portfolio_summary=portfolio_summary,
         )
 
     def evaluate_signal_point(
@@ -178,6 +201,7 @@ class BacktestEngine:
             final_score=score_breakdown["final"],
             recommendation=recommendation.recommendation.value,
             rsi14=self._optional_float(latest.get("rsi14")),
+            sma50=self._optional_float(latest.get("sma50")),
             distance_to_support_pct=support.distance_to_support_pct,
             support_low=support.support_zone_low,
             support_high=support.support_zone_high,
@@ -229,6 +253,7 @@ class BacktestEngine:
             signal_index=signal_index,
             entry_index=entry_index,
             entry_price=entry_price,
+            position_pct=position_pct,
             scenario=scenario,
             future_exposure=future_exposure,
         )
@@ -395,6 +420,258 @@ class BacktestEngine:
 
         return sorted(trades, key=lambda trade: (trade.entry_date, trade.symbol))
 
+    def _run_portfolio_realistic_mode(
+        self,
+        assets: list[AssetORM],
+        frames: dict[int, pd.DataFrame],
+        scenario: BacktestScenario,
+    ) -> tuple[
+        list[SimulatedTrade],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        dict[str, Any],
+    ]:
+        trades: list[SimulatedTrade] = []
+        portfolio_events: list[dict[str, Any]] = []
+        equity_curve: list[dict[str, Any]] = []
+        cash_curve: list[dict[str, Any]] = []
+        holdings: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        pending_orders: list[dict[str, Any]] = []
+        cash = float(scenario.initial_capital)
+        realized_pnl = 0.0
+        peak_equity = float(scenario.initial_capital)
+        max_concentration = 0.0
+        daily_position_counts: list[int] = []
+        daily_exposures: list[float] = []
+
+        asset_by_id = {asset.id: asset for asset in assets}
+        calendar = sorted(
+            {
+                pd.Timestamp(row["date"]).date()
+                for frame in frames.values()
+                for _, row in frame.iterrows()
+                if scenario.start_date <= pd.Timestamp(row["date"]).date() <= scenario.end_date
+            }
+        )
+
+        for current_date in calendar:
+            rows_by_asset: dict[int, tuple[int, pd.Series]] = {}
+            for asset in assets:
+                frame = frames[asset.id]
+                matching = frame.index[frame["date"].dt.date == current_date]
+                if len(matching) > 0:
+                    rows_by_asset[asset.id] = (int(matching[0]), frame.iloc[int(matching[0])])
+
+            cash = self._execute_pending_buy_orders(
+                current_date=current_date,
+                pending_orders=pending_orders,
+                rows_by_asset=rows_by_asset,
+                holdings=holdings,
+                cash=cash,
+                initial_capital=scenario.initial_capital,
+                portfolio_events=portfolio_events,
+                scenario=scenario,
+            )
+
+            market_values = self._current_market_values(holdings, rows_by_asset)
+            total_equity = cash + sum(market_values.values())
+            exposure = self._exposure_from_market_values(
+                asset_by_id=asset_by_id,
+                market_values=market_values,
+                total_equity=total_equity,
+            )
+
+            for asset_id in list(holdings):
+                if asset_id not in rows_by_asset or not holdings[asset_id]:
+                    continue
+                asset = asset_by_id[asset_id]
+                index, row = rows_by_asset[asset_id]
+                signal = self.evaluate_signal_point(asset, frames[asset_id], index, exposure)
+                if signal is None:
+                    continue
+                chosen_alert = self._select_position_alert_for_sale(
+                    asset=asset,
+                    row=row,
+                    signal=signal,
+                    lots=holdings[asset_id],
+                    market_value=market_values.get(asset_id, 0.0),
+                    total_equity=total_equity,
+                    scenario=scenario,
+                )
+                if chosen_alert is None:
+                    continue
+                cash_before = cash
+                sale_result = self._execute_position_alert_sale(
+                    current_date=current_date,
+                    asset=asset,
+                    row=row,
+                    lots=holdings[asset_id],
+                    signal=signal,
+                    alert_type=chosen_alert,
+                    cash=cash,
+                    initial_capital=scenario.initial_capital,
+                    portfolio_events=portfolio_events,
+                    scenario=scenario,
+                )
+                cash = sale_result["cash"]
+                realized_pnl += sale_result["realized_pnl"]
+                trades.extend(sale_result["trades"])
+                if not holdings[asset_id]:
+                    holdings.pop(asset_id, None)
+                if cash != cash_before:
+                    market_values = self._current_market_values(holdings, rows_by_asset)
+                    total_equity = cash + sum(market_values.values())
+                    exposure = self._exposure_from_market_values(
+                        asset_by_id=asset_by_id,
+                        market_values=market_values,
+                        total_equity=total_equity,
+                    )
+
+            for asset in assets:
+                if asset.id not in rows_by_asset:
+                    continue
+                index, row = rows_by_asset[asset.id]
+                existing_lots = holdings.get(asset.id, [])
+                if existing_lots and not scenario.portfolio_simulation_rules.allow_add_to_existing:
+                    continue
+                if (
+                    not existing_lots
+                    and len([lots for lots in holdings.values() if lots])
+                    >= scenario.max_open_positions
+                ):
+                    continue
+                signal = self.evaluate_signal_point(asset, frames[asset.id], index, exposure)
+                if signal is None or not self._entry_allowed(signal, scenario):
+                    continue
+                order = self._build_buy_order(
+                    asset=asset,
+                    signal=signal,
+                    current_date=current_date,
+                    row=row,
+                    exposure=exposure,
+                    cash=cash,
+                    holdings=holdings,
+                    asset_by_id=asset_by_id,
+                    rows_by_asset=rows_by_asset,
+                    scenario=scenario,
+                )
+                if order is None:
+                    continue
+                if scenario.execution_rules.entry_mode.value == "next_open":
+                    pending_orders.append(order)
+                else:
+                    cash = self._execute_buy_order(
+                        order=order,
+                        execution_price=float(row["close"]),
+                        current_date=current_date,
+                        holdings=holdings,
+                        cash=cash,
+                        initial_capital=scenario.initial_capital,
+                        portfolio_events=portfolio_events,
+                        scenario=scenario,
+                    )
+                    market_values = self._current_market_values(holdings, rows_by_asset)
+                    total_equity = cash + sum(market_values.values())
+                    exposure = self._exposure_from_market_values(
+                        asset_by_id=asset_by_id,
+                        market_values=market_values,
+                        total_equity=total_equity,
+                    )
+
+            market_values = self._current_market_values(holdings, rows_by_asset)
+            unrealized_pnl = self._unrealized_pnl(holdings, rows_by_asset)
+            total_equity = cash + sum(market_values.values())
+            peak_equity = max(peak_equity, total_equity)
+            max_concentration = max(
+                max_concentration,
+                (
+                    max((value / total_equity) for value in market_values.values())
+                    if total_equity > 0 and market_values
+                    else 0.0
+                ),
+            )
+            daily_position_counts.append(len([lots for lots in holdings.values() if lots]))
+            daily_exposures.append(
+                (sum(market_values.values()) / total_equity) if total_equity > 0 else 0.0
+            )
+            equity_curve.append(
+                {
+                    "date": current_date.isoformat(),
+                    "equity": round(total_equity, 6),
+                    "cash": round(cash, 6),
+                    "invested_value": round(sum(market_values.values()), 6),
+                    "realized_pnl": round(realized_pnl, 6),
+                    "unrealized_pnl": round(unrealized_pnl, 6),
+                    "open_positions": len([lots for lots in holdings.values() if lots]),
+                }
+            )
+            cash_curve.append(
+                {
+                    "date": current_date.isoformat(),
+                    "cash": round(cash, 6),
+                    "cash_pct": round((cash / total_equity) * 100, 4) if total_equity > 0 else 0.0,
+                }
+            )
+
+        final_market_values = self._current_market_values_with_last_known(holdings, frames)
+        final_equity = equity_curve[-1]["equity"] if equity_curve else scenario.initial_capital
+        portfolio_summary = {
+            "initial_capital": round(float(scenario.initial_capital), 2),
+            "final_capital": round(float(final_equity), 2),
+            "portfolio_return_pct": round(
+                ((float(final_equity) / scenario.initial_capital) - 1) * 100,
+                2,
+            )
+            if scenario.initial_capital > 0
+            else 0.0,
+            "final_cash": round(cash, 2),
+            "realized_pnl": round(realized_pnl, 2),
+            "unrealized_pnl": round(self._unrealized_pnl_with_last_known(holdings, frames), 2),
+            "buy_count": sum(1 for event in portfolio_events if event["action"] == "BUY"),
+            "sell_partial_count": sum(
+                1 for event in portfolio_events if event["action"] == "SELL_PARTIAL"
+            ),
+            "sell_full_count": sum(
+                1 for event in portfolio_events if event["action"] == "SELL_FULL"
+            ),
+            "avg_entry_size_pct": round(
+                pd.Series(
+                    [
+                        float(event["payload_json"].get("executed_weight_pct", 0.0))
+                        for event in portfolio_events
+                        if event["action"] == "BUY"
+                    ]
+                ).mean(),
+                2,
+            )
+            if any(event["action"] == "BUY" for event in portfolio_events)
+            else 0.0,
+            "avg_reduction_size_pct": round(
+                pd.Series(
+                    [
+                        float(event["payload_json"].get("sold_fraction_pct", 0.0))
+                        for event in portfolio_events
+                        if event["action"] in {"SELL_PARTIAL", "SELL_FULL"}
+                    ]
+                ).mean(),
+                2,
+            )
+            if any(event["action"] in {"SELL_PARTIAL", "SELL_FULL"} for event in portfolio_events)
+            else 0.0,
+            "average_exposure_pct": round(float(pd.Series(daily_exposures).mean() * 100), 2)
+            if daily_exposures
+            else 0.0,
+            "max_concentration_pct": round(max_concentration * 100, 2),
+            "avg_open_positions": round(float(pd.Series(daily_position_counts).mean()), 2)
+            if daily_position_counts
+            else 0.0,
+            "final_open_positions": len([lots for lots in holdings.values() if lots]),
+            "final_holdings_value": round(sum(final_market_values.values()), 2),
+        }
+
+        return trades, portfolio_events, equity_curve, cash_curve, portfolio_summary
+
     def _resolve_exit(
         self,
         *,
@@ -404,6 +681,7 @@ class BacktestEngine:
         signal_index: int,
         entry_index: int,
         entry_price: float,
+        position_pct: float,
         scenario: BacktestScenario,
         future_exposure: PortfolioExposureModel | None,
     ) -> tuple[dict[str, Any] | None, int | None]:
@@ -414,7 +692,6 @@ class BacktestEngine:
         mae_pct = 0.0
         mfe_pct = 0.0
         max_drawdown_pct = 0.0
-
         for index in range(entry_index + 1, max_end_index + 1):
             row = frame.iloc[index]
             low_return = ((float(row["low"]) / entry_price) - 1) * 100
@@ -457,8 +734,16 @@ class BacktestEngine:
                         index,
                     )
 
-            if scenario.exit_rules.strategy.value in {"signal_loss", "hybrid"}:
+            future_signal: HistoricalSignal | None = None
+            if scenario.exit_rules.strategy.value in {
+                "signal_loss",
+                "hybrid",
+                "position_alerts",
+                "hybrid_position_alerts",
+            }:
                 future_signal = self.evaluate_signal_point(asset, frame, index, future_exposure)
+
+            if scenario.exit_rules.strategy.value in {"signal_loss", "hybrid"}:
                 if future_signal is not None:
                     invalidated = (
                         signal.invalidation_level is not None
@@ -488,10 +773,39 @@ class BacktestEngine:
                             index,
                         )
 
+            if scenario.exit_rules.strategy.value in {
+                "position_alerts",
+                "hybrid_position_alerts",
+            } and future_signal is not None:
+                exit_alert_type = self._position_alert_exit_type(
+                    asset=asset,
+                    row=row,
+                    signal=future_signal,
+                    entry_price=entry_price,
+                    position_pct=position_pct,
+                    scenario=scenario,
+                )
+                if exit_alert_type is not None:
+                    return (
+                        self._exit_payload(
+                            frame=frame,
+                            index=index,
+                            entry_index=entry_index,
+                            exit_price=float(row["close"]),
+                            exit_reason=exit_alert_type,
+                            mae_pct=mae_pct,
+                            mfe_pct=mfe_pct,
+                            max_drawdown_pct=max_drawdown_pct,
+                            slippage_bps=scenario.execution_rules.slippage_bps,
+                        ),
+                        index,
+                    )
+
             horizon_hit = index >= entry_index + scenario.exit_rules.fixed_horizon_days
             if (
                 scenario.exit_rules.strategy.value == "fixed_horizon"
                 or scenario.exit_rules.strategy.value == "hybrid"
+                or scenario.exit_rules.strategy.value == "hybrid_position_alerts"
             ) and horizon_hit:
                 return (
                     self._exit_payload(
@@ -525,6 +839,434 @@ class BacktestEngine:
             )
         return None, None
 
+    def _execute_pending_buy_orders(
+        self,
+        *,
+        current_date: date,
+        pending_orders: list[dict[str, Any]],
+        rows_by_asset: dict[int, tuple[int, pd.Series]],
+        holdings: dict[int, list[dict[str, Any]]],
+        cash: float,
+        initial_capital: float,
+        portfolio_events: list[dict[str, Any]],
+        scenario: BacktestScenario,
+    ) -> float:
+        remaining_orders: list[dict[str, Any]] = []
+        for order in pending_orders:
+            row_payload = rows_by_asset.get(order["asset_id"])
+            if row_payload is None:
+                remaining_orders.append(order)
+                continue
+            _, row = row_payload
+            cash = self._execute_buy_order(
+                order=order,
+                execution_price=float(row["open"]),
+                current_date=current_date,
+                holdings=holdings,
+                cash=cash,
+                initial_capital=initial_capital,
+                portfolio_events=portfolio_events,
+                scenario=scenario,
+            )
+        pending_orders[:] = remaining_orders
+        return cash
+
+    def _build_buy_order(
+        self,
+        *,
+        asset: AssetORM,
+        signal: HistoricalSignal,
+        current_date: date,
+        row: pd.Series,
+        exposure: PortfolioExposureModel,
+        cash: float,
+        holdings: dict[int, list[dict[str, Any]]],
+        asset_by_id: dict[int, AssetORM],
+        rows_by_asset: dict[int, tuple[int, pd.Series]],
+        scenario: BacktestScenario,
+    ) -> dict[str, Any] | None:
+        total_equity = cash + sum(self._current_market_values(holdings, rows_by_asset).values())
+        rules = scenario.portfolio_simulation_rules
+        desired_weight = (
+            signal.suggested_weight_add_pct / 100
+            if rules.use_suggested_weight_add
+            else (rules.buy_weight_override_pct or scenario.execution_rules.fixed_position_pct)
+        )
+        desired_value = total_equity * desired_weight
+        available_cash = max(0.0, cash - (rules.cash_min_target_pct * total_equity))
+        desired_value = min(desired_value, available_cash)
+        if desired_value < rules.min_trade_value:
+            return None
+
+        if rules.apply_portfolio_limits and total_equity > 0:
+            current_asset_value = sum(
+                lot["remaining_qty"] * float(row["close"]) for lot in holdings.get(asset.id, [])
+            )
+            sector_value = sum(
+                self._holding_market_value(holdings.get(other_id, []), rows_by_asset.get(other_id))
+                for other_id, other_asset in asset_by_id.items()
+                if other_asset.sector == asset.sector
+            )
+            type_value = sum(
+                self._holding_market_value(holdings.get(other_id, []), rows_by_asset.get(other_id))
+                for other_id, other_asset in asset_by_id.items()
+                if other_asset.asset_type == asset.asset_type
+            )
+            desired_value = min(
+                desired_value,
+                max(0.0, rules.max_asset_weight * total_equity - current_asset_value),
+                max(0.0, rules.max_sector_weight * total_equity - sector_value),
+                max(
+                    0.0,
+                    float(rules.max_asset_type_weight.get(asset.asset_type, 1.0)) * total_equity
+                    - type_value,
+                ),
+            )
+            if desired_value < rules.min_trade_value:
+                return None
+
+        return {
+            "asset_id": asset.id,
+            "symbol": asset.symbol,
+            "signal_date": signal.signal_date,
+            "order_date": current_date,
+            "desired_value": desired_value,
+            "signal": signal,
+            "execution_side": "buy",
+        }
+
+    def _execute_buy_order(
+        self,
+        *,
+        order: dict[str, Any],
+        execution_price: float,
+        current_date: date,
+        holdings: dict[int, list[dict[str, Any]]],
+        cash: float,
+        initial_capital: float,
+        portfolio_events: list[dict[str, Any]],
+        scenario: BacktestScenario,
+    ) -> float:
+        exec_price = self._apply_slippage(
+            execution_price,
+            scenario.execution_rules.slippage_bps,
+            side="buy",
+        )
+        commission_rate = scenario.execution_rules.commission_bps / 10000
+        affordable_value = min(order["desired_value"], cash)
+        quantity = affordable_value / (exec_price * (1 + commission_rate))
+        if quantity <= 0:
+            return cash
+        notional = quantity * exec_price
+        commission = notional * commission_rate
+        cash_before = cash
+        cash -= notional + commission
+        signal: HistoricalSignal = order["signal"]
+        holdings[order["asset_id"]].append(
+            {
+                "entry_signal_date": signal.signal_date,
+                "entry_date": current_date,
+                "entry_price": exec_price,
+                "entry_cost_total": notional + commission,
+                "entry_notional": notional,
+                "remaining_qty": quantity,
+                "asset_type": signal.asset_type,
+                "sector": signal.sector,
+                "recommendation": signal.recommendation,
+                "technical_score": signal.technical_score,
+                "risk_score": signal.risk_score,
+                "portfolio_fit_score": signal.portfolio_fit_score,
+                "final_score": signal.final_score,
+                "invalidation_level": signal.invalidation_level,
+                "rationale": signal.rationale,
+                "parameters": scenario.to_payload(),
+            }
+        )
+        portfolio_events.append(
+            {
+                "asset_id": order["asset_id"],
+                "symbol": order["symbol"],
+                "event_date": current_date,
+                "action": "BUY",
+                "trigger_type": "entry_signal",
+                "quantity": round(quantity, 8),
+                "price": round(exec_price, 4),
+                "gross_value": round(notional, 2),
+                "cash_before": round(cash_before, 2),
+                "cash_after": round(cash, 2),
+                "position_weight_before": None,
+                "position_weight_after": None,
+                "payload_json": {
+                    "executed_weight_pct": round((notional / initial_capital) * 100, 2),
+                    "signal_final_score": signal.final_score,
+                    "recommendation": signal.recommendation,
+                },
+            }
+        )
+        return cash
+
+    def _select_position_alert_for_sale(
+        self,
+        *,
+        asset: AssetORM,
+        row: pd.Series,
+        signal: HistoricalSignal,
+        lots: list[dict[str, Any]],
+        market_value: float,
+        total_equity: float,
+        scenario: BacktestScenario,
+    ) -> str | None:
+        if total_equity <= 0 or market_value <= 0:
+            return None
+        avg_cost = sum(lot["entry_cost_total"] for lot in lots) / max(
+            1e-9, sum(lot["remaining_qty"] for lot in lots)
+        )
+        target_weight = max(
+            scenario.portfolio_simulation_rules.buy_weight_override_pct
+            or 0.0,
+            signal.suggested_weight_add_pct / 100,
+        )
+        alerts = self.position_management_alerts_service.detect_alerts(
+            asset=asset,
+            row={
+                "last_price": float(row["close"]),
+                "rsi14": signal.rsi14,
+                "sma50": signal.sma50,
+                "support_low": signal.support_low,
+                "final_opportunity_score": signal.final_score,
+                "risk_score": signal.risk_score,
+                "recommendation": signal.recommendation,
+            },
+            position=PositionContext(
+                quantity=sum(lot["remaining_qty"] for lot in lots),
+                avg_cost=avg_cost,
+                current_weight=market_value / total_equity,
+                target_weight=target_weight,
+            ),
+        )
+        alert_types = {alert.event_type for alert in alerts}
+        for event_type in scenario.portfolio_simulation_rules.sell_priority:
+            if (
+                event_type in alert_types
+                and scenario.portfolio_simulation_rules.sell_reduction_by_alert_type.get(
+                    event_type,
+                    0.0,
+                )
+                > 0
+            ):
+                return event_type
+        return None
+
+    def _execute_position_alert_sale(
+        self,
+        *,
+        current_date: date,
+        asset: AssetORM,
+        row: pd.Series,
+        lots: list[dict[str, Any]],
+        signal: HistoricalSignal,
+        alert_type: str,
+        cash: float,
+        initial_capital: float,
+        portfolio_events: list[dict[str, Any]],
+        scenario: BacktestScenario,
+    ) -> dict[str, Any]:
+        trades: list[SimulatedTrade] = []
+        commission_rate = scenario.execution_rules.commission_bps / 10000
+        exit_price = self._apply_slippage(
+            float(row["close"]),
+            scenario.execution_rules.slippage_bps,
+            side="sell",
+        )
+        current_value = sum(lot["remaining_qty"] * exit_price for lot in lots)
+        reduction_pct = float(
+            scenario.portfolio_simulation_rules.sell_reduction_by_alert_type.get(alert_type, 0.0)
+        )
+        sell_value = current_value * reduction_pct
+        residual = current_value - sell_value
+        if residual < scenario.portfolio_simulation_rules.min_residual_position_value:
+            sell_value = current_value
+        quantity_to_sell = min(
+            sum(lot["remaining_qty"] for lot in lots),
+            sell_value / exit_price if exit_price > 0 else 0.0,
+        )
+        if quantity_to_sell <= 0:
+            return {"cash": cash, "realized_pnl": 0.0, "trades": []}
+
+        cash_before = cash
+        realized_pnl = 0.0
+        remaining_to_sell = quantity_to_sell
+        total_qty_before = sum(lot["remaining_qty"] for lot in lots)
+        while remaining_to_sell > 1e-9 and lots:
+            lot = lots[0]
+            sell_qty = min(lot["remaining_qty"], remaining_to_sell)
+            entry_cost_alloc = lot["entry_cost_total"] * (sell_qty / lot["remaining_qty"])
+            gross_proceeds = sell_qty * exit_price
+            sell_commission = gross_proceeds * commission_rate
+            net_proceeds = gross_proceeds - sell_commission
+            gross_return_pct = ((exit_price / lot["entry_price"]) - 1) * 100
+            net_return_pct = ((net_proceeds / entry_cost_alloc) - 1) * 100
+            realized_pnl += net_proceeds - entry_cost_alloc
+            cash += net_proceeds
+            trade = SimulatedTrade(
+                asset_id=asset.id,
+                symbol=asset.symbol,
+                name=asset.name,
+                asset_type=asset.asset_type,
+                sector=asset.sector,
+                entry_signal_date=lot["entry_signal_date"],
+                entry_date=lot["entry_date"],
+                exit_date=current_date,
+                entry_price=round(lot["entry_price"], 4),
+                exit_price=round(exit_price, 4),
+                position_pct=round(entry_cost_alloc / initial_capital, 4),
+                gross_return_pct=round(gross_return_pct, 2),
+                net_return_pct=round(net_return_pct, 2),
+                max_drawdown_pct=0.0,
+                mae_pct=0.0,
+                mfe_pct=0.0,
+                holding_days=(current_date - lot["entry_date"]).days,
+                exit_reason=alert_type,
+                recommendation=lot["recommendation"],
+                technical_score=lot["technical_score"],
+                risk_score=lot["risk_score"],
+                portfolio_fit_score=lot["portfolio_fit_score"],
+                final_score=lot["final_score"],
+                invalidation_level=lot["invalidation_level"],
+                rationale=lot["rationale"],
+                parameters=lot["parameters"],
+            )
+            trades.append(trade)
+            lot["entry_cost_total"] -= entry_cost_alloc
+            lot["entry_notional"] -= lot["entry_notional"] * (sell_qty / lot["remaining_qty"])
+            lot["remaining_qty"] -= sell_qty
+            remaining_to_sell -= sell_qty
+            if lot["remaining_qty"] <= 1e-9:
+                lots.pop(0)
+
+        position_value_after = sum(lot["remaining_qty"] * exit_price for lot in lots)
+        portfolio_events.append(
+            {
+                "asset_id": asset.id,
+                "symbol": asset.symbol,
+                "event_date": current_date,
+                "action": "SELL_FULL" if position_value_after <= 0 else "SELL_PARTIAL",
+                "trigger_type": alert_type,
+                "quantity": round(quantity_to_sell, 8),
+                "price": round(exit_price, 4),
+                "gross_value": round(quantity_to_sell * exit_price, 2),
+                "cash_before": round(cash_before, 2),
+                "cash_after": round(cash, 2),
+                "position_weight_before": None,
+                "position_weight_after": None,
+                "payload_json": {
+                    "sold_fraction_pct": round((quantity_to_sell / total_qty_before) * 100, 2),
+                    "signal_final_score": signal.final_score,
+                    "risk_score": signal.risk_score,
+                },
+            }
+        )
+        return {"cash": cash, "realized_pnl": realized_pnl, "trades": trades}
+
+    def _current_market_values(
+        self,
+        holdings: dict[int, list[dict[str, Any]]],
+        rows_by_asset: dict[int, tuple[int, pd.Series]],
+    ) -> dict[int, float]:
+        market_values: dict[int, float] = {}
+        for asset_id, lots in holdings.items():
+            row_payload = rows_by_asset.get(asset_id)
+            if row_payload is None:
+                continue
+            _, row = row_payload
+            market_values[asset_id] = (
+                sum(lot["remaining_qty"] for lot in lots) * float(row["close"])
+            )
+        return market_values
+
+    def _current_market_values_with_last_known(
+        self,
+        holdings: dict[int, list[dict[str, Any]]],
+        frames: dict[int, pd.DataFrame],
+    ) -> dict[int, float]:
+        values: dict[int, float] = {}
+        for asset_id, lots in holdings.items():
+            frame = frames.get(asset_id)
+            if frame is None or frame.empty:
+                continue
+            close = float(frame.iloc[-1]["close"])
+            values[asset_id] = sum(lot["remaining_qty"] for lot in lots) * close
+        return values
+
+    def _unrealized_pnl(
+        self,
+        holdings: dict[int, list[dict[str, Any]]],
+        rows_by_asset: dict[int, tuple[int, pd.Series]],
+    ) -> float:
+        pnl = 0.0
+        for asset_id, lots in holdings.items():
+            row_payload = rows_by_asset.get(asset_id)
+            if row_payload is None:
+                continue
+            _, row = row_payload
+            close = float(row["close"])
+            pnl += sum((close * lot["remaining_qty"]) - lot["entry_cost_total"] for lot in lots)
+        return pnl
+
+    def _unrealized_pnl_with_last_known(
+        self,
+        holdings: dict[int, list[dict[str, Any]]],
+        frames: dict[int, pd.DataFrame],
+    ) -> float:
+        pnl = 0.0
+        for asset_id, lots in holdings.items():
+            frame = frames.get(asset_id)
+            if frame is None or frame.empty:
+                continue
+            close = float(frame.iloc[-1]["close"])
+            pnl += sum((close * lot["remaining_qty"]) - lot["entry_cost_total"] for lot in lots)
+        return pnl
+
+    def _exposure_from_market_values(
+        self,
+        *,
+        asset_by_id: dict[int, AssetORM],
+        market_values: dict[int, float],
+        total_equity: float,
+    ) -> PortfolioExposureModel:
+        by_asset: dict[str, float] = {}
+        by_sector: dict[str, float] = defaultdict(float)
+        by_asset_type: dict[str, float] = defaultdict(float)
+        if total_equity <= 0:
+            return PortfolioExposureModel(
+                total_invested_weight=0.0,
+                by_asset={},
+                by_sector={},
+                by_asset_type={},
+            )
+        for asset_id, value in market_values.items():
+            asset = asset_by_id[asset_id]
+            weight = value / total_equity
+            by_asset[asset.symbol] = weight
+            by_sector[asset.sector] += weight
+            by_asset_type[asset.asset_type] += weight
+        return PortfolioExposureModel(
+            total_invested_weight=sum(by_asset.values()),
+            by_asset=by_asset,
+            by_sector=dict(by_sector),
+            by_asset_type=dict(by_asset_type),
+        )
+
+    @staticmethod
+    def _holding_market_value(
+        lots: list[dict[str, Any]],
+        row_payload: tuple[int, pd.Series] | None,
+    ) -> float:
+        if row_payload is None:
+            return 0.0
+        _, row = row_payload
+        return sum(lot["remaining_qty"] for lot in lots) * float(row["close"])
+
     def _persist_result(
         self,
         scenario: BacktestScenario,
@@ -532,6 +1274,8 @@ class BacktestEngine:
         metrics: dict[str, float],
         segmented: dict[str, dict[str, Any]],
         *,
+        portfolio_events: list[dict[str, Any]] | None = None,
+        portfolio_summary: dict[str, Any] | None = None,
         run_name: str,
     ) -> tuple[int, int]:
         run = self.backtest_repo.create_run(
@@ -575,8 +1319,28 @@ class BacktestEngine:
                         "metrics_json": segment_metrics.to_dict(),
                     }
                 )
+        if portfolio_summary:
+            metric_payloads.append(
+                {
+                    "run_id": run.id,
+                    "scope": "portfolio",
+                    "segment_type": "summary",
+                    "segment_value": "portfolio_realistic",
+                    "metrics_json": portfolio_summary,
+                }
+            )
         self.backtest_repo.add_metrics(metric_payloads)
         self.backtest_repo.add_trades(self._trade_payloads(run.id, parameter_set.id, trades))
+        if portfolio_events:
+            self.backtest_repo.add_portfolio_events(
+                [
+                    {
+                        "run_id": run.id,
+                        **event,
+                    }
+                    for event in portfolio_events
+                ]
+            )
         return run.id, parameter_set.id
 
     def _trade_payloads(
@@ -721,6 +1485,55 @@ class BacktestEngine:
             if type_weight > max_type:
                 return True
         return False
+
+    def _position_alert_exit_type(
+        self,
+        *,
+        asset: AssetORM,
+        row: pd.Series,
+        signal: HistoricalSignal,
+        entry_price: float,
+        position_pct: float,
+        scenario: BacktestScenario,
+    ) -> str | None:
+        allowed_types = set(scenario.exit_rules.position_alert_exit_types)
+        if not allowed_types:
+            return None
+
+        target_weight = max(position_pct, signal.suggested_weight_add_pct / 100)
+        position = PositionContext(
+            quantity=1.0,
+            avg_cost=entry_price,
+            current_weight=position_pct,
+            target_weight=target_weight,
+        )
+        row_payload = {
+            "last_price": float(row["close"]),
+            "rsi14": signal.rsi14,
+            "sma50": signal.sma50,
+            "support_low": signal.support_low,
+            "final_opportunity_score": signal.final_score,
+            "risk_score": signal.risk_score,
+            "recommendation": signal.recommendation,
+        }
+        alerts = self.position_management_alerts_service.detect_alerts(
+            asset=asset,
+            row=row_payload,
+            position=position,
+        )
+        by_type = {alert.event_type: alert for alert in alerts}
+        for event_type in [
+            "exit_candidate",
+            "stop_loss_warning",
+            "reduce_risk",
+            "take_profit",
+            "trim_position",
+            "rebalance_sell",
+            "overbought_warning",
+        ]:
+            if event_type in allowed_types and event_type in by_type:
+                return event_type
+        return None
 
     @staticmethod
     def _build_warnings(total_trades: int, scenario: BacktestScenario) -> list[str]:

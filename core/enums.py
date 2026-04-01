@@ -55,6 +55,13 @@ class AlertType(StrEnum):
     RISK_DETERIORATION = "risk_deterioration"
     DATA_QUALITY = "data_quality"
     PORTFOLIO_CONSTRAINT = "portfolio_constraint"
+    OVERBOUGHT_WARNING = "overbought_warning"
+    TAKE_PROFIT = "take_profit"
+    TRIM_POSITION = "trim_position"
+    REDUCE_RISK = "reduce_risk"
+    EXIT_CANDIDATE = "exit_candidate"
+    STOP_LOSS_WARNING = "stop_loss_warning"
+    REBALANCE_SELL = "rebalance_sell"
 
 
 class TradeIntentStatus(StrEnum):

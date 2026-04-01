@@ -38,6 +38,22 @@ with session_scope() as session:
 asset_symbols = [asset.symbol for asset in assets]
 default_assets = asset_symbols[: min(8, len(asset_symbols))]
 
+toggle_col, status_col = st.columns([2, 3])
+override_thresholds = toggle_col.toggle(
+    "Override thresholds de entrada",
+    value=False,
+    help="Si no se activa, el backtest usa la configuracion real actual del sistema.",
+)
+if override_thresholds:
+    status_col.info(
+        "Overrides activos: puedes limitar entrada a BUY_CANDIDATE y ajustar thresholds."
+    )
+else:
+    status_col.caption(
+        "Usando configuracion base del sistema para entrada. "
+        "Activa el override para editar filtros."
+    )
+
 with st.form("backtesting_form"):
     col1, col2 = st.columns(2)
     selected_assets = col1.multiselect(
@@ -45,7 +61,14 @@ with st.form("backtesting_form"):
         options=asset_symbols,
         default=default_assets,
     )
-    mode = col2.selectbox("Modo", ["trade_by_trade", "portfolio"])
+    mode = col2.selectbox(
+        "Modo",
+        ["trade_by_trade", "portfolio", "portfolio_realistic"],
+        help=(
+            "trade_by_trade evalua trades aislados; portfolio mantiene una simulacion "
+            "basica; portfolio_realistic simula cash, ampliaciones y ventas parciales."
+        ),
+    )
 
     col3, col4 = st.columns(2)
     start_date = col3.date_input(
@@ -60,27 +83,48 @@ with st.form("backtesting_form"):
         0,
         100,
         int(config["entry_rules"]["min_final_score"]),
+        disabled=not override_thresholds,
     )
     max_risk_score = col6.slider(
         "Max risk score",
         0,
         100,
         int(config["entry_rules"]["max_risk_score"]),
+        disabled=not override_thresholds,
     )
-    max_rsi14 = col7.slider("Max RSI14", 0, 100, int(config["entry_rules"]["max_rsi14"]))
+    max_rsi14 = col7.slider(
+        "Max RSI14",
+        0,
+        100,
+        int(config["entry_rules"]["max_rsi14"]),
+        disabled=not override_thresholds,
+    )
+    allowed_recommendations = st.multiselect(
+        "Recomendaciones permitidas para entrada",
+        options=["BUY_CANDIDATE", "WATCH", "AVOID"],
+        default=config["entry_rules"]["allowed_recommendations"],
+        disabled=not override_thresholds,
+    )
 
     col8, col9, col10 = st.columns(3)
+    exit_options = [
+        "fixed_horizon",
+        "take_profit_stop_loss",
+        "signal_loss",
+        "hybrid",
+        "position_alerts",
+        "hybrid_position_alerts",
+    ]
     exit_strategy = col8.selectbox(
         "Salida",
-        ["fixed_horizon", "take_profit_stop_loss", "signal_loss", "hybrid"],
-        index=["fixed_horizon", "take_profit_stop_loss", "signal_loss", "hybrid"].index(
-            config["exit_rules"]["strategy"]
-        ),
+        exit_options,
+        index=exit_options.index(config["exit_rules"]["strategy"]),
     )
     fixed_horizon = col9.selectbox("Horizon dias", [5, 10, 20, 40], index=2)
     require_bullish_trend = col10.checkbox(
         "Exigir SMA50 > SMA200",
         value=config["entry_rules"]["require_bullish_trend"],
+        disabled=not override_thresholds,
     )
 
     col11, col12, col13 = st.columns(3)
@@ -102,6 +146,134 @@ with st.form("backtesting_form"):
         max_value=100.0,
         value=float(config["exit_rules"]["signal_loss_score_threshold"]),
     )
+    position_alert_exit_types = st.multiselect(
+        "Alertas de posicion como salida",
+        options=[
+            "take_profit",
+            "reduce_risk",
+            "exit_candidate",
+            "stop_loss_warning",
+            "trim_position",
+            "rebalance_sell",
+            "overbought_warning",
+        ],
+        default=config["exit_rules"].get("position_alert_exit_types", []),
+    )
+
+    st.subheader("Cartera simulada")
+    col16, col17, col18 = st.columns(3)
+    initial_capital = col16.number_input(
+        "Capital inicial (€)",
+        min_value=1000.0,
+        value=float(config["defaults"]["initial_capital"]),
+        step=1000.0,
+    )
+    cash_min_target_pct = col17.number_input(
+        "Cash minimo objetivo (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(config["portfolio_simulation"]["cash_min_target_pct"] * 100),
+        step=1.0,
+    )
+    max_open_positions = col18.number_input(
+        "Max posiciones simultaneas",
+        min_value=1,
+        max_value=50,
+        value=int(config["defaults"]["max_open_positions"]),
+        step=1,
+    )
+
+    col19, col20, col21 = st.columns(3)
+    max_asset_weight_pct = col19.number_input(
+        "Max peso por activo (%)",
+        min_value=1.0,
+        max_value=100.0,
+        value=float(config["portfolio_simulation"]["max_asset_weight"] * 100),
+        step=1.0,
+    )
+    max_sector_weight_pct = col20.number_input(
+        "Max peso por sector (%)",
+        min_value=1.0,
+        max_value=100.0,
+        value=float(config["portfolio_simulation"]["max_sector_weight"] * 100),
+        step=1.0,
+    )
+    allow_add_to_existing = col21.checkbox(
+        "Permitir ampliar posiciones ya existentes",
+        value=bool(config["portfolio_simulation"]["allow_add_to_existing"]),
+    )
+
+    col22, col23, col24 = st.columns(3)
+    use_suggested_weight_add = col22.checkbox(
+        "Usar suggested_weight_add",
+        value=bool(config["portfolio_simulation"]["use_suggested_weight_add"]),
+    )
+    buy_weight_override_pct = col23.number_input(
+        "Buy weight override (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(config["portfolio_simulation"]["buy_weight_override_pct"] or 0.0),
+        step=0.5,
+        disabled=use_suggested_weight_add,
+    )
+    apply_portfolio_limits = col24.checkbox(
+        "Aplicar limites de cartera",
+        value=bool(config["portfolio_simulation"]["apply_portfolio_limits"]),
+    )
+
+    st.caption("Porcentaje de venta por tipo de alerta")
+    sale_cfg = config["portfolio_simulation"]["sell_reduction_by_alert_type"]
+    col25, col26, col27 = st.columns(3)
+    sell_take_profit = col25.number_input(
+        "TAKE_PROFIT (%)",
+        0.0,
+        100.0,
+        float(sale_cfg["take_profit"] * 100),
+        5.0,
+    )
+    sell_trim = col26.number_input(
+        "TRIM_POSITION (%)",
+        0.0,
+        100.0,
+        float(sale_cfg["trim_position"] * 100),
+        5.0,
+    )
+    sell_reduce_risk = col27.number_input(
+        "REDUCE_RISK (%)",
+        0.0,
+        100.0,
+        float(sale_cfg["reduce_risk"] * 100),
+        5.0,
+    )
+    col28, col29, col30 = st.columns(3)
+    sell_exit = col28.number_input(
+        "EXIT_CANDIDATE (%)",
+        0.0,
+        100.0,
+        float(sale_cfg["exit_candidate"] * 100),
+        5.0,
+    )
+    sell_stop = col29.number_input(
+        "STOP_LOSS_WARNING (%)",
+        0.0,
+        100.0,
+        float(sale_cfg["stop_loss_warning"] * 100),
+        5.0,
+    )
+    sell_rebalance = col30.number_input(
+        "REBALANCE_SELL (%)",
+        0.0,
+        100.0,
+        float(sale_cfg["rebalance_sell"] * 100),
+        5.0,
+    )
+    sell_overbought = st.number_input(
+        "OVERBOUGHT_WARNING (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(sale_cfg["overbought_warning"] * 100),
+        step=5.0,
+    )
 
     col14, col15 = st.columns(2)
     run_backtest = col14.form_submit_button("Lanzar backtest", use_container_width=True)
@@ -119,12 +291,17 @@ base_scenario = default_backtest_scenario(
 scenario = scenario_with_overrides(
     base_scenario,
     mode=base_scenario.mode.__class__(mode),
-    entry_overrides={
-        "min_final_score": float(min_final_score),
-        "max_risk_score": float(max_risk_score),
-        "max_rsi14": float(max_rsi14),
-        "require_bullish_trend": require_bullish_trend,
-    },
+    entry_overrides=(
+        {
+            "min_final_score": float(min_final_score),
+            "max_risk_score": float(max_risk_score),
+            "max_rsi14": float(max_rsi14),
+            "require_bullish_trend": require_bullish_trend,
+            "allowed_recommendations": tuple(allowed_recommendations),
+        }
+        if override_thresholds
+        else None
+    ),
     exit_overrides={
         "strategy": exit_strategy,
         "fixed_horizon_days": fixed_horizon,
@@ -132,8 +309,33 @@ scenario = scenario_with_overrides(
         "stop_loss_pct": stop_loss_pct / 100,
         "signal_loss_score_threshold": float(signal_loss_threshold),
         "max_holding_days": max(fixed_horizon, base_scenario.exit_rules.max_holding_days),
+        "position_alert_exit_types": tuple(position_alert_exit_types),
+    },
+    portfolio_simulation_overrides={
+        "cash_min_target_pct": cash_min_target_pct / 100,
+        "max_asset_weight": max_asset_weight_pct / 100,
+        "max_sector_weight": max_sector_weight_pct / 100,
+        "apply_portfolio_limits": apply_portfolio_limits,
+        "allow_add_to_existing": allow_add_to_existing,
+        "use_suggested_weight_add": use_suggested_weight_add,
+        "buy_weight_override_pct": (
+            None
+            if use_suggested_weight_add or buy_weight_override_pct <= 0
+            else buy_weight_override_pct / 100
+        ),
+        "sell_reduction_by_alert_type": {
+            "take_profit": sell_take_profit / 100,
+            "trim_position": sell_trim / 100,
+            "reduce_risk": sell_reduce_risk / 100,
+            "exit_candidate": sell_exit / 100,
+            "stop_loss_warning": sell_stop / 100,
+            "rebalance_sell": sell_rebalance / 100,
+            "overbought_warning": sell_overbought / 100,
+        },
     },
 )
+scenario.initial_capital = float(initial_capital)
+scenario.max_open_positions = int(max_open_positions)
 
 if run_backtest:
     with st.spinner("Ejecutando backtest historico sin look-ahead..."):
@@ -154,6 +356,8 @@ if run_backtest:
 
     trades_df = frames["trades"]
     equity_df = frames["equity"]
+    cash_df = frames.get("cash", pd.DataFrame())
+    portfolio_events_df = frames.get("portfolio_events", pd.DataFrame())
 
     if not equity_df.empty:
         st.plotly_chart(
@@ -166,6 +370,29 @@ if run_backtest:
             px.area(equity_df, x="date", y="drawdown_pct", title="Drawdown chart"),
             use_container_width=True,
         )
+        if not cash_df.empty:
+            st.plotly_chart(
+                px.line(cash_df, x="date", y="cash", title="Cash curve"),
+                use_container_width=True,
+            )
+
+    if result.portfolio_summary:
+        st.subheader("Resumen cartera simulada")
+        summary = result.portfolio_summary
+        summary_cols = st.columns(6)
+        summary_cols[0].metric("Capital inicial", f"{summary['initial_capital']:.0f} €")
+        summary_cols[1].metric("Capital final", f"{summary['final_capital']:.0f} €")
+        summary_cols[2].metric("Retorno cartera", f"{summary['portfolio_return_pct']:.2f}%")
+        summary_cols[3].metric("Cash final", f"{summary['final_cash']:.0f} €")
+        summary_cols[4].metric("PnL realizado", f"{summary['realized_pnl']:.0f} €")
+        summary_cols[5].metric("PnL no realizado", f"{summary['unrealized_pnl']:.0f} €")
+        summary_cols = st.columns(6)
+        summary_cols[0].metric("Compras", int(summary["buy_count"]))
+        summary_cols[1].metric("Ventas parciales", int(summary["sell_partial_count"]))
+        summary_cols[2].metric("Salidas completas", int(summary["sell_full_count"]))
+        summary_cols[3].metric("Entrada media", f"{summary['avg_entry_size_pct']:.2f}%")
+        summary_cols[4].metric("Reduccion media", f"{summary['avg_reduction_size_pct']:.2f}%")
+        summary_cols[5].metric("Concentracion max", f"{summary['max_concentration_pct']:.2f}%")
 
     if not trades_df.empty:
         st.plotly_chart(
@@ -214,6 +441,9 @@ if run_backtest:
 
         st.subheader("Detalle de operaciones")
         st.dataframe(trades_df, use_container_width=True, hide_index=True)
+        if not portfolio_events_df.empty:
+            st.subheader("Eventos de cartera")
+            st.dataframe(portfolio_events_df, use_container_width=True, hide_index=True)
 
 if run_optimization:
     with st.spinner("Ejecutando grid search de parametros..."):

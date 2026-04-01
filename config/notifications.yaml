@@ -17,6 +17,7 @@ telegram:
   send_data_alerts: false
   send_watch_alerts: false
   send_portfolio_alerts: false
+  send_sell_alerts: false
 
 formatting:
   include_buy_zone: true

@@ -76,26 +76,48 @@ class NotificationService:
             "data_quality": telegram_cfg.get("send_data_alerts", True),
             "watch_signal": telegram_cfg.get("send_watch_alerts", True),
             "portfolio_constraint": telegram_cfg.get("send_portfolio_alerts", True),
+            "overbought_warning": telegram_cfg.get("send_sell_alerts", False),
+            "take_profit": telegram_cfg.get("send_sell_alerts", False),
+            "trim_position": telegram_cfg.get("send_sell_alerts", False),
+            "reduce_risk": telegram_cfg.get("send_sell_alerts", False),
+            "exit_candidate": telegram_cfg.get("send_sell_alerts", False),
+            "stop_loss_warning": telegram_cfg.get("send_sell_alerts", False),
+            "rebalance_sell": telegram_cfg.get("send_sell_alerts", False),
         }
         return type_flags.get(alert_type, True)
 
     def build_telegram_message(self, alert: AlertORM) -> str:
         payload = alert.payload_json or {}
         lines = [
-            f"[{alert.severity.upper()}] {alert.symbol}",
+            f"[{alert.severity.upper()}] {alert.symbol} · {alert.alert_type}",
             alert.title,
             alert.message,
         ]
+        if payload.get("alert_group"):
+            lines.append(f"Grupo: {payload['alert_group']}")
         if "final_score" in payload:
             lines.append(f"Final score: {payload['final_score']}")
         if "risk_score" in payload:
             lines.append(f"Risk score: {payload['risk_score']}")
         if payload.get("last_price") is not None:
             lines.append(f"Precio: {payload['last_price']}")
+        if payload.get("profit_pct") is not None:
+            lines.append(f"P/L latente: {payload['profit_pct']}%")
+        if payload.get("current_weight_pct") is not None:
+            lines.append(
+                f"Peso actual: {payload['current_weight_pct']}%"
+                + (
+                    f" / objetivo {payload['target_weight_pct']}%"
+                    if payload.get("target_weight_pct") is not None
+                    else ""
+                )
+            )
         if payload.get("buy_zone"):
             lines.append(f"Buy zone: {payload['buy_zone']}")
         if payload.get("suggested_weight_add") is not None:
             lines.append(f"Peso sugerido: {payload['suggested_weight_add']}%")
+        if payload.get("action_suggestion"):
+            lines.append(f"Accion sugerida: {payload['action_suggestion']}")
         if payload.get("invalidation"):
             lines.append(f"Invalidacion: {payload['invalidation']}")
         return "\n".join(lines)

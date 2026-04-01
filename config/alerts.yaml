@@ -10,6 +10,14 @@ rules:
   enable_risk_alerts: false
   enable_data_alerts: false
   enable_portfolio_alerts: false
+  enable_sell_alerts: true
+  enable_overbought_alerts: true
+  enable_take_profit_alerts: true
+  enable_trim_position_alerts: true
+  enable_reduce_risk_alerts: true
+  enable_exit_candidate_alerts: true
+  enable_stop_loss_alerts: true
+  enable_rebalance_sell_alerts: true
   min_minutes_between_duplicate_alerts: 180
   cooldown_by_asset_minutes: 180
   cooldown_by_alert_type_minutes:
@@ -18,8 +26,37 @@ rules:
     risk_deterioration: 60
     data_quality: 720
     portfolio_constraint: 360
+    overbought_warning: 720
+    take_profit: 720
+    trim_position: 720
+    reduce_risk: 240
+    exit_candidate: 180
+    stop_loss_warning: 120
+    rebalance_sell: 1440
   risk_deterioration_threshold: 75
   stale_or_demo_blocks_trade_intent: true
+  overbought_rsi_threshold: 75
+  overbought_extension_pct_above_sma50: 0.12
+  take_profit_min_profit_pct: 15
+  take_profit_min_rsi14: 68
+  trim_weight_excess_pct: 0.03
+  rebalance_weight_excess_pct: 0.01
+  reduce_risk_score_threshold: 70
+  exit_final_score_threshold: 35
+  exit_risk_score_threshold: 80
+  stop_loss_buffer_pct: 0.015
+  material_change_thresholds:
+    entry_signal: 5
+    watch_signal: 5
+    risk_deterioration: 5
+    portfolio_constraint: 5
+    overbought_warning: 3
+    take_profit: 3
+    trim_position: 0.01
+    reduce_risk: 5
+    exit_candidate: 5
+    stop_loss_warning: 0.01
+    rebalance_sell: 0.01
   preferred_universes_for_high_priority:
     - etf
     - stock

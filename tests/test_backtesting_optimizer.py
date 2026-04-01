@@ -12,6 +12,7 @@ from backtesting.models import (
     ExecutionRules,
     ExitRules,
     ExitStrategy,
+    PortfolioSimulationRules,
     PositionSizeMode,
     StrategyMetrics,
 )
@@ -46,6 +47,7 @@ def _scenario() -> BacktestScenario:
             stop_loss_pct=0.05,
             signal_loss_score_threshold=45,
             invalidation_buffer_pct=0.01,
+            position_alert_exit_types=(),
         ),
         execution_rules=ExecutionRules(
             entry_mode=EntryMode.NEXT_OPEN,
@@ -55,6 +57,20 @@ def _scenario() -> BacktestScenario:
             slippage_bps=5,
         ),
         evaluation_rules=EvaluationRules(train_ratio=0.7, min_trades_warning_threshold=8),
+        portfolio_simulation_rules=PortfolioSimulationRules(
+            cash_min_target_pct=0.1,
+            max_asset_weight=0.12,
+            max_sector_weight=0.3,
+            max_asset_type_weight={"stock": 0.65, "etf": 0.8, "crypto": 0.15},
+            apply_portfolio_limits=True,
+            allow_add_to_existing=True,
+            use_suggested_weight_add=True,
+            buy_weight_override_pct=None,
+            min_trade_value=250.0,
+            min_residual_position_value=150.0,
+            sell_reduction_by_alert_type={"exit_candidate": 1.0},
+            sell_priority=("exit_candidate",),
+        ),
     )
 
 

@@ -29,6 +29,11 @@ exit_rules:
   stop_loss_pct: 0.07
   signal_loss_score_threshold: 45
   invalidation_buffer_pct: 0.01
+  position_alert_exit_types:
+    - take_profit
+    - reduce_risk
+    - exit_candidate
+    - stop_loss_warning
 
 evaluation:
   train_ratio: 0.7
@@ -37,3 +42,40 @@ evaluation:
 portfolio:
   respect_sector_limits: false
   respect_asset_type_limits: false
+  max_asset_weight: 0.12
+  max_sector_weight: 0.30
+  max_asset_type_weight:
+    stock: 0.65
+    etf: 0.80
+    crypto: 0.15
+
+portfolio_simulation:
+  cash_min_target_pct: 0.10
+  max_asset_weight: 0.12
+  max_sector_weight: 0.30
+  max_asset_type_weight:
+    stock: 0.65
+    etf: 0.80
+    crypto: 0.15
+  apply_portfolio_limits: true
+  allow_add_to_existing: true
+  use_suggested_weight_add: true
+  buy_weight_override_pct: null
+  min_trade_value: 250
+  min_residual_position_value: 150
+  sell_reduction_by_alert_type:
+    take_profit: 0.25
+    reduce_risk: 0.30
+    trim_position: 0.20
+    exit_candidate: 1.00
+    stop_loss_warning: 1.00
+    rebalance_sell: 0.20
+    overbought_warning: 0.10
+  sell_priority:
+    - stop_loss_warning
+    - exit_candidate
+    - reduce_risk
+    - trim_position
+    - take_profit
+    - rebalance_sell
+    - overbought_warning

@@ -5,12 +5,17 @@ from typing import Any
 
 from core.config import load_yaml_config
 from core.logger import get_logger
-from data.database import AssetORM
+from data.database import AssetORM, PortfolioPositionORM
 from data.repositories.alerts_repo import AlertsRepository
 from data.repositories.assets_repo import AssetsRepository
+from data.repositories.portfolio_repo import PortfolioRepository
 from data.repositories.signals_repo import SignalsRepository
 from services.notification_service import NotificationService
 from services.portfolio_service import PortfolioService
+from services.position_management_alerts_service import (
+    PositionContext,
+    PositionManagementAlertsService,
+)
 from services.trade_intent_service import TradeIntentService
 from services.watchlist_service import WatchlistService
 
@@ -35,13 +40,16 @@ class AlertService:
     def __init__(self, session) -> None:
         self.session = session
         self.config = load_yaml_config("alerts.yaml")
+        self.portfolio_rules = load_yaml_config("portfolio_rules.yaml")
         self.alerts_repo = AlertsRepository(session)
         self.assets_repo = AssetsRepository(session)
         self.signals_repo = SignalsRepository(session)
+        self.portfolio_repo = PortfolioRepository(session)
         self.watchlist_service = WatchlistService(session)
         self.portfolio_service = PortfolioService(session)
         self.notification_service = NotificationService()
         self.trade_intent_service = TradeIntentService(session)
+        self.position_management_alerts_service = PositionManagementAlertsService()
 
     def scan_market_events(self) -> AlertRunSummary:
         summary = AlertRunSummary()
@@ -49,6 +57,9 @@ class AlertService:
         rows_by_symbol = {row["symbol"]: row for row in rows}
         assets = {asset.symbol: asset for asset in self.assets_repo.list_enabled()}
         exposure = self.portfolio_service.get_exposures()
+        positions_by_asset_id = {
+            position.asset_id: position for position in self.portfolio_repo.list_positions()
+        }
 
         for row in rows:
             asset = assets.get(row["symbol"])
@@ -56,7 +67,8 @@ class AlertService:
                 continue
             summary.scanned_assets += 1
             try:
-                events = self._detect_events(asset, row, exposure)
+                position = positions_by_asset_id.get(asset.id)
+                events = self._detect_events(asset, row, exposure, position)
                 summary.events_detected += len(events)
                 for event in events:
                     self.alerts_repo.create_market_event(event)
@@ -111,6 +123,7 @@ class AlertService:
         asset: AssetORM,
         row: dict[str, Any],
         exposure,
+        position: PortfolioPositionORM | None,
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         rules = self._rules_for_asset(asset.asset_type)
@@ -130,6 +143,8 @@ class AlertService:
                         severity=self._entry_severity(asset, row, rules),
                         title=f"{asset.symbol} activa setup de entrada",
                         message="Nuevo BUY_CANDIDATE con score y riesgo accionables.",
+                        alert_group="entry",
+                        material_value=self._as_float(row.get("final_opportunity_score")),
                     )
                 )
 
@@ -147,11 +162,14 @@ class AlertService:
                     severity="info",
                     title=f"{asset.symbol} en vigilancia reforzada",
                     message="WATCH fuerte cerca de condiciones accionables.",
+                    alert_group="entry",
+                    material_value=self._as_float(row.get("final_opportunity_score")),
                 )
             )
 
         if rules["enable_risk_alerts"]:
-            if row.get("risk_score") is not None and float(row["risk_score"]) >= float(
+            risk_score = self._as_float(row.get("risk_score"))
+            if risk_score is not None and risk_score >= float(
                 rules["risk_deterioration_threshold"]
             ):
                 events.append(
@@ -162,23 +180,27 @@ class AlertService:
                         severity="critical",
                         title=f"{asset.symbol} deterioro de riesgo",
                         message="El risk score ha entrado en zona exigente.",
+                        alert_group="risk",
+                        material_value=risk_score,
                     )
                 )
             if (
                 previous_signal is not None
                 and previous_signal.recommendation != row.get("recommendation")
+                and row.get("recommendation") == "AVOID"
             ):
-                if row.get("recommendation") == "AVOID":
-                    events.append(
-                        self._event_payload(
-                            asset=asset,
-                            event_type="risk_deterioration",
-                            row=row,
-                            severity="high",
-                            title=f"{asset.symbol} empeora la recomendacion",
-                            message="La recomendacion ha pasado a AVOID o ha perdido calidad.",
-                        )
+                events.append(
+                    self._event_payload(
+                        asset=asset,
+                        event_type="risk_deterioration",
+                        row=row,
+                        severity="high",
+                        title=f"{asset.symbol} empeora la recomendacion",
+                        message="La recomendacion ha pasado a AVOID o ha perdido calidad.",
+                        alert_group="risk",
+                        material_value=self._as_float(row.get("final_opportunity_score")),
                     )
+                )
 
         if rules["enable_data_alerts"] and (
             row.get("freshness_status") != "fresh" or row.get("data_mode") != "real"
@@ -192,11 +214,14 @@ class AlertService:
                     severity=severity,
                     title=f"{asset.symbol} con datos no ideales",
                     message="El activo no esta en modo real/fresh y requiere cautela.",
+                    alert_group="data",
+                    material_value=self._as_float(row.get("last_price")),
                 )
             )
 
         if rules["enable_portfolio_alerts"] and row.get("portfolio_fit_score") is not None:
-            if float(row["portfolio_fit_score"]) <= float(
+            portfolio_fit = self._as_float(row.get("portfolio_fit_score"))
+            if portfolio_fit is not None and portfolio_fit <= float(
                 rules["max_actionable_portfolio_fit_penalty"]
             ):
                 events.append(
@@ -207,8 +232,61 @@ class AlertService:
                         severity="warning",
                         title=f"{asset.symbol} limitado por cartera",
                         message="La cartera actual reduce el encaje de esta señal.",
+                        alert_group="risk",
+                        material_value=portfolio_fit,
                     )
                 )
+
+        if self._has_open_position(position) and rules["enable_sell_alerts"]:
+            events.extend(
+                self._detect_position_management_events(
+                    asset=asset,
+                    row=row,
+                    position=position,
+                    exposure=exposure,
+                    rules=rules,
+                )
+            )
+        return events
+
+    def _detect_position_management_events(
+        self,
+        *,
+        asset: AssetORM,
+        row: dict[str, Any],
+        position: PortfolioPositionORM,
+        exposure,
+        rules: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        _ = exposure
+        position_context = PositionContext(
+            quantity=float(position.quantity),
+            avg_cost=float(position.avg_cost),
+            current_weight=float(position.current_weight),
+            target_weight=float(position.target_weight),
+        )
+        alerts = self.position_management_alerts_service.detect_alerts(
+            asset=asset,
+            row=row,
+            position=position_context,
+            rules=rules,
+        )
+        for alert in alerts:
+            events.append(
+                self._event_payload(
+                    asset=asset,
+                    event_type=alert.event_type,
+                    row=row,
+                    severity=alert.severity,
+                    title=alert.title,
+                    message=alert.message,
+                    alert_group=alert.alert_group,
+                    material_value=alert.material_value,
+                    position_metrics=alert.position_metrics,
+                    action_suggestion=alert.action_suggestion,
+                )
+            )
         return events
 
     def _process_event(
@@ -275,7 +353,12 @@ class AlertService:
         severity: str,
         title: str,
         message: str,
+        alert_group: str,
+        material_value: float | None = None,
+        position_metrics: dict[str, Any] | None = None,
+        action_suggestion: str | None = None,
     ) -> dict[str, Any]:
+        dedupe_key = f"{asset.symbol}:{event_type}"
         return {
             "asset_id": asset.id,
             "symbol": asset.symbol,
@@ -284,12 +367,17 @@ class AlertService:
                 "severity": severity,
                 "title": title,
                 "message": message,
-                "dedupe_key": f"{asset.symbol}:{event_type}",
-                "material_change": self._material_change(asset, row),
+                "dedupe_key": dedupe_key,
+                "material_change": self._material_change(
+                    dedupe_key=dedupe_key,
+                    event_type=event_type,
+                    current_value=material_value,
+                ),
                 "alert_payload": {
                     "symbol": asset.symbol,
                     "name": asset.name,
                     "asset_type": asset.asset_type,
+                    "alert_group": alert_group,
                     "final_score": row.get("final_opportunity_score"),
                     "risk_score": row.get("risk_score"),
                     "last_price": row.get("last_price"),
@@ -302,19 +390,33 @@ class AlertService:
                     "portfolio_fit_score": row.get("portfolio_fit_score"),
                     "score_breakdown": row.get("score_breakdown", {}),
                     "reasons": row.get("reasons", []),
+                    "material_value": material_value,
+                    "action_suggestion": action_suggestion,
+                    **(position_metrics or {}),
                 },
             },
         }
 
-    def _material_change(self, asset: AssetORM, row: dict[str, Any]) -> bool:
-        latest = self.alerts_repo.latest_by_dedupe_key(f"{asset.symbol}:entry_signal")
+    def _material_change(
+        self,
+        *,
+        dedupe_key: str,
+        event_type: str,
+        current_value: float | None,
+    ) -> bool:
+        latest = self.alerts_repo.latest_by_dedupe_key(dedupe_key)
         if latest is None or not latest.payload_json:
             return True
-        previous_score = latest.payload_json.get("final_score")
-        if previous_score is None or row.get("final_opportunity_score") is None:
+        previous_value = latest.payload_json.get("material_value")
+        if previous_value is None or current_value is None:
             return False
-        delta = abs(float(row["final_opportunity_score"]) - float(previous_score))
-        return delta >= float(self.config["rules"]["score_material_change_delta"])
+        delta = abs(float(current_value) - float(previous_value))
+        threshold = float(
+            self.config["rules"]
+            .get("material_change_thresholds", {})
+            .get(event_type, self.config["rules"]["score_material_change_delta"])
+        )
+        return delta >= threshold
 
     @staticmethod
     def _price_in_buy_zone(row: dict[str, Any]) -> bool:
@@ -342,3 +444,15 @@ class AlertService:
         overrides = base.get("universe_overrides", {}).get(asset_type, {})
         merged = {**base, **overrides}
         return merged
+
+    @staticmethod
+    def _has_open_position(position: PortfolioPositionORM | None) -> bool:
+        if position is None:
+            return False
+        return position.quantity > 0 or position.current_weight > 0
+
+    @staticmethod
+    def _as_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        return float(value)
