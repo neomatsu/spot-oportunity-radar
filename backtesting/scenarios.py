@@ -14,6 +14,7 @@ from backtesting.models import (
     ExitStrategy,
     PortfolioSimulationRules,
     PositionSizeMode,
+    RSICycleRules,
 )
 from core.config import load_yaml_config
 
@@ -40,6 +41,7 @@ def default_backtest_scenario(
     evaluation = config["evaluation"]
     portfolio = config["portfolio"]
     portfolio_sim = config.get("portfolio_simulation", {})
+    rsi_cycle = config.get("rsi_cycle_strategy", {})
 
     default_end = end_date or date.today()
     default_start = start_date or (default_end - timedelta(days=365 * 2))
@@ -128,6 +130,25 @@ def default_backtest_scenario(
                 )
             ),
         ),
+        rsi_cycle_rules=RSICycleRules(
+            oversold_threshold=float(rsi_cycle.get("oversold_threshold", 30)),
+            deep_oversold_threshold_1=float(rsi_cycle.get("deep_oversold_threshold_1", 25)),
+            deep_oversold_threshold_2=float(rsi_cycle.get("deep_oversold_threshold_2", 20)),
+            overbought_threshold=float(rsi_cycle.get("overbought_threshold", 70)),
+            overbought_threshold_1=float(rsi_cycle.get("overbought_threshold_1", 75)),
+            overbought_threshold_2=float(rsi_cycle.get("overbought_threshold_2", 80)),
+            buy_pct_bullish_divergence=float(rsi_cycle.get("buy_pct_bullish_divergence", 0.35)),
+            buy_pct_rsi_25=float(rsi_cycle.get("buy_pct_rsi_25", 0.25)),
+            buy_pct_rsi_20=float(rsi_cycle.get("buy_pct_rsi_20", 0.40)),
+            sell_pct_bearish_divergence=float(rsi_cycle.get("sell_pct_bearish_divergence", 0.35)),
+            sell_pct_rsi_75=float(rsi_cycle.get("sell_pct_rsi_75", 0.25)),
+            sell_pct_rsi_80=float(rsi_cycle.get("sell_pct_rsi_80", 0.40)),
+            min_bars_between_pivots=int(rsi_cycle.get("min_bars_between_pivots", 3)),
+            max_bars_between_pivots=int(rsi_cycle.get("max_bars_between_pivots", 20)),
+            pivot_price_source=str(rsi_cycle.get("pivot_price_source", "close")),
+            require_confirmation_cross=bool(rsi_cycle.get("require_confirmation_cross", True)),
+            max_one_divergence_per_cycle=bool(rsi_cycle.get("max_one_divergence_per_cycle", True)),
+        ),
     )
 
 
@@ -140,6 +161,7 @@ def scenario_with_overrides(
     exit_overrides: dict[str, Any] | None = None,
     execution_overrides: dict[str, Any] | None = None,
     portfolio_simulation_overrides: dict[str, Any] | None = None,
+    rsi_cycle_overrides: dict[str, Any] | None = None,
 ) -> BacktestScenario:
     entry = {
         "min_final_score": base.entry_rules.min_final_score,
@@ -190,6 +212,26 @@ def scenario_with_overrides(
         "sell_priority": base.portfolio_simulation_rules.sell_priority,
     }
     portfolio_sim.update(portfolio_simulation_overrides or {})
+    rsi_cycle = {
+        "oversold_threshold": base.rsi_cycle_rules.oversold_threshold,
+        "deep_oversold_threshold_1": base.rsi_cycle_rules.deep_oversold_threshold_1,
+        "deep_oversold_threshold_2": base.rsi_cycle_rules.deep_oversold_threshold_2,
+        "overbought_threshold": base.rsi_cycle_rules.overbought_threshold,
+        "overbought_threshold_1": base.rsi_cycle_rules.overbought_threshold_1,
+        "overbought_threshold_2": base.rsi_cycle_rules.overbought_threshold_2,
+        "buy_pct_bullish_divergence": base.rsi_cycle_rules.buy_pct_bullish_divergence,
+        "buy_pct_rsi_25": base.rsi_cycle_rules.buy_pct_rsi_25,
+        "buy_pct_rsi_20": base.rsi_cycle_rules.buy_pct_rsi_20,
+        "sell_pct_bearish_divergence": base.rsi_cycle_rules.sell_pct_bearish_divergence,
+        "sell_pct_rsi_75": base.rsi_cycle_rules.sell_pct_rsi_75,
+        "sell_pct_rsi_80": base.rsi_cycle_rules.sell_pct_rsi_80,
+        "min_bars_between_pivots": base.rsi_cycle_rules.min_bars_between_pivots,
+        "max_bars_between_pivots": base.rsi_cycle_rules.max_bars_between_pivots,
+        "pivot_price_source": base.rsi_cycle_rules.pivot_price_source,
+        "require_confirmation_cross": base.rsi_cycle_rules.require_confirmation_cross,
+        "max_one_divergence_per_cycle": base.rsi_cycle_rules.max_one_divergence_per_cycle,
+    }
+    rsi_cycle.update(rsi_cycle_overrides or {})
 
     return BacktestScenario(
         name=name or base.name,
@@ -255,6 +297,25 @@ def scenario_with_overrides(
             min_residual_position_value=float(portfolio_sim["min_residual_position_value"]),
             sell_reduction_by_alert_type=dict(portfolio_sim["sell_reduction_by_alert_type"]),
             sell_priority=tuple(portfolio_sim["sell_priority"]),
+        ),
+        rsi_cycle_rules=RSICycleRules(
+            oversold_threshold=float(rsi_cycle["oversold_threshold"]),
+            deep_oversold_threshold_1=float(rsi_cycle["deep_oversold_threshold_1"]),
+            deep_oversold_threshold_2=float(rsi_cycle["deep_oversold_threshold_2"]),
+            overbought_threshold=float(rsi_cycle["overbought_threshold"]),
+            overbought_threshold_1=float(rsi_cycle["overbought_threshold_1"]),
+            overbought_threshold_2=float(rsi_cycle["overbought_threshold_2"]),
+            buy_pct_bullish_divergence=float(rsi_cycle["buy_pct_bullish_divergence"]),
+            buy_pct_rsi_25=float(rsi_cycle["buy_pct_rsi_25"]),
+            buy_pct_rsi_20=float(rsi_cycle["buy_pct_rsi_20"]),
+            sell_pct_bearish_divergence=float(rsi_cycle["sell_pct_bearish_divergence"]),
+            sell_pct_rsi_75=float(rsi_cycle["sell_pct_rsi_75"]),
+            sell_pct_rsi_80=float(rsi_cycle["sell_pct_rsi_80"]),
+            min_bars_between_pivots=int(rsi_cycle["min_bars_between_pivots"]),
+            max_bars_between_pivots=int(rsi_cycle["max_bars_between_pivots"]),
+            pivot_price_source=str(rsi_cycle["pivot_price_source"]),
+            require_confirmation_cross=bool(rsi_cycle["require_confirmation_cross"]),
+            max_one_divergence_per_cycle=bool(rsi_cycle["max_one_divergence_per_cycle"]),
         ),
     )
 

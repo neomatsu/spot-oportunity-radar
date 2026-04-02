@@ -9,6 +9,7 @@ from data.database import AssetORM, PortfolioPositionORM
 from data.repositories.alerts_repo import AlertsRepository
 from data.repositories.assets_repo import AssetsRepository
 from data.repositories.portfolio_repo import PortfolioRepository
+from data.repositories.prices_repo import PricesRepository
 from data.repositories.signals_repo import SignalsRepository
 from services.notification_service import NotificationService
 from services.portfolio_service import PortfolioService
@@ -16,6 +17,7 @@ from services.position_management_alerts_service import (
     PositionContext,
     PositionManagementAlertsService,
 )
+from services.rsi_cycle_alerts_service import RSICycleAlertsService
 from services.trade_intent_service import TradeIntentService
 from services.watchlist_service import WatchlistService
 
@@ -45,11 +47,13 @@ class AlertService:
         self.assets_repo = AssetsRepository(session)
         self.signals_repo = SignalsRepository(session)
         self.portfolio_repo = PortfolioRepository(session)
+        self.prices_repo = PricesRepository(session)
         self.watchlist_service = WatchlistService(session)
         self.portfolio_service = PortfolioService(session)
         self.notification_service = NotificationService()
         self.trade_intent_service = TradeIntentService(session)
         self.position_management_alerts_service = PositionManagementAlertsService()
+        self.rsi_cycle_alerts_service = RSICycleAlertsService()
 
     def scan_market_events(self) -> AlertRunSummary:
         summary = AlertRunSummary()
@@ -245,6 +249,39 @@ class AlertService:
                     position=position,
                     exposure=exposure,
                     rules=rules,
+                )
+            )
+        if rules.get("enable_rsi_cycle_alerts", False):
+            events.extend(self._detect_rsi_cycle_events(asset=asset, row=row))
+        return events
+
+    def _detect_rsi_cycle_events(
+        self,
+        *,
+        asset: AssetORM,
+        row: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        frame = self.prices_repo.get_asset_prices(asset.id)
+        signals = self.rsi_cycle_alerts_service.detect_latest_signals(frame)
+        events: list[dict[str, Any]] = []
+        for signal in signals:
+            events.append(
+                self._event_payload(
+                    asset=asset,
+                    event_type=signal.event_type,
+                    row=row,
+                    severity=signal.severity,
+                    title=f"{asset.symbol} · {signal.title}",
+                    message=signal.message,
+                    alert_group=signal.alert_group,
+                    material_value=signal.rsi14,
+                    position_metrics={
+                        "rsi14": signal.rsi14,
+                        "signal_price": signal.price,
+                        "signal_date": str(signal.signal_date),
+                        "strategy_name": "rsi_cycle_strategy",
+                    },
+                    action_suggestion="Seguir el evento RSI del modo especifico",
                 )
             )
         return events

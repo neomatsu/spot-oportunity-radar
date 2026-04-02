@@ -283,8 +283,9 @@ El tamano sugerido de posicion depende de:
 - `Asset Detail`: grafico con medias, soporte, RSI, breakdown del score, rationale, invalidation y estado de datos
 - `Portfolio`: exposicion por activo, sector y clase; alertas simples de concentracion
 - `Alerts`: alertas activas, historial, estado de envios y trade intents revisables
-- `Backtesting`: motor historico configurable con modos trade-by-trade y portfolio basico,
-  reglas de salida, segmentacion, persistencia y grid search de parametros
+- `Backtesting`: motor historico configurable con modos trade-by-trade, portfolio basico,
+  portfolio realista y un modo RSI-only, con reglas de salida, segmentacion,
+  persistencia y grid search de parametros
 
 ## Alertas y trade intents
 
@@ -312,6 +313,15 @@ Ademas, para posiciones ya abiertas en cartera, el sistema soporta alertas de ge
 - `exit_candidate`
 - `stop_loss_warning`
 - `rebalance_sell`
+
+El sistema tambien soporta alertas especificas de la estrategia `RSI Cycle`:
+
+- `buy_rsi_25`
+- `buy_rsi_20`
+- `buy_bullish_divergence`
+- `sell_rsi_75`
+- `sell_rsi_80`
+- `sell_bearish_divergence`
 
 ### Severidades
 
@@ -437,6 +447,15 @@ o ampliar con tipos de gestion como:
 - `trim_position`
 - `exit_candidate`
 - `rebalance_sell`
+
+o con tipos especificos del modo RSI:
+
+- `buy_rsi_25`
+- `buy_rsi_20`
+- `buy_bullish_divergence`
+- `sell_rsi_75`
+- `sell_rsi_80`
+- `sell_bearish_divergence`
 
 ### Simplificaciones actuales
 
@@ -596,6 +615,49 @@ El modulo `backtesting/` ahora esta separado en:
     `reduce_risk`, `trim_position`, `exit_candidate`, `stop_loss_warning`,
     `rebalance_sell`, `overbought_warning`)
   - registra eventos `BUY`, `SELL_PARTIAL` y `SELL_FULL`
+- `rsi_cycle_strategy`: modo especifico RSI-only para activos tendenciales
+  - trabaja solo con RSI diario, ciclos y divergencias confirmadas
+  - abre un ciclo de compra cuando el RSI entra en sobreventa
+  - permite, como maximo, una compra por `BUY_RSI_25`, una por `BUY_RSI_20`
+    y una por `BUY_BULLISH_DIVERGENCE` dentro del mismo ciclo
+  - abre un ciclo de venta cuando el RSI entra en sobrecompra
+  - permite, como maximo, una venta por `SELL_RSI_75`, una por `SELL_RSI_80`
+    y una por `SELL_BEARISH_DIVERGENCE` dentro del mismo ciclo
+  - resetea cada ciclo solo cuando el RSI reingresa por encima de 30 o por
+    debajo de 70
+  - no usa stop loss ni take profit clasico
+  - no usa las alertas generales del sistema como salida
+  - registra motivos explicitos como `BUY_RSI_25`, `BUY_RSI_20`,
+    `BUY_BULLISH_DIVERGENCE`, `SELL_RSI_75`, `SELL_RSI_80`,
+    `SELL_BEARISH_DIVERGENCE`
+
+### RSI Cycle Strategy
+
+La deteccion de divergencias es auditable y sin look-ahead:
+
+- un pivot bajo solo se confirma cuando el RSI ya ha girado al alza
+- un pivot alto solo se confirma cuando el RSI ya ha girado a la baja
+- la divergencia alcista exige:
+  - segundo valle con precio mas bajo
+  - segundo valle con RSI mas alto
+  - separacion minima y maxima configurable entre pivots
+  - confirmacion por cruce de vuelta sobre 30, por defecto activada
+- la divergencia bajista aplica la logica espejo con el cruce de vuelta bajo 70
+
+Parametros especificos del modo:
+
+- thresholds de sobreventa y sobrecompra
+- porcentajes de compra por evento RSI
+- porcentajes de venta por evento RSI
+- distancia minima y maxima entre pivots
+- comparacion por `close` o por extremos `high/low`
+- una sola divergencia por ciclo o multiples, segun config
+
+Limitaciones:
+
+- es un modelo EOD, no intradia
+- no esta pensado para scalping ni activos extremadamente laterales
+- el objetivo es capturar acumulacion/distribucion por ciclos, no timing perfecto
 
 ### Configuracion
 

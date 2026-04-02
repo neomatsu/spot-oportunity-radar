@@ -12,12 +12,19 @@ telegram:
     - critical
   enabled_alert_types:
     - entry_signal
+    - buy_rsi_25
+    - buy_rsi_20
+    - buy_bullish_divergence
+    - sell_rsi_75
+    - sell_rsi_80
+    - sell_bearish_divergence
   send_entry_alerts: true
   send_risk_alerts: false
   send_data_alerts: false
   send_watch_alerts: false
   send_portfolio_alerts: false
   send_sell_alerts: false
+  send_rsi_cycle_alerts: false
 
 formatting:
   include_buy_zone: true

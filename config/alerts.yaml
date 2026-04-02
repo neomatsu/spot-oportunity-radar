@@ -18,6 +18,7 @@ rules:
   enable_exit_candidate_alerts: true
   enable_stop_loss_alerts: true
   enable_rebalance_sell_alerts: true
+  enable_rsi_cycle_alerts: true
   min_minutes_between_duplicate_alerts: 180
   cooldown_by_asset_minutes: 180
   cooldown_by_alert_type_minutes:
@@ -33,6 +34,12 @@ rules:
     exit_candidate: 180
     stop_loss_warning: 120
     rebalance_sell: 1440
+    buy_rsi_25: 720
+    buy_rsi_20: 720
+    buy_bullish_divergence: 720
+    sell_rsi_75: 720
+    sell_rsi_80: 720
+    sell_bearish_divergence: 720
   risk_deterioration_threshold: 75
   stale_or_demo_blocks_trade_intent: true
   overbought_rsi_threshold: 75
@@ -57,6 +64,12 @@ rules:
     exit_candidate: 5
     stop_loss_warning: 0.01
     rebalance_sell: 0.01
+    buy_rsi_25: 3
+    buy_rsi_20: 3
+    buy_bullish_divergence: 3
+    sell_rsi_75: 3
+    sell_rsi_80: 3
+    sell_bearish_divergence: 3
   preferred_universes_for_high_priority:
     - etf
     - stock

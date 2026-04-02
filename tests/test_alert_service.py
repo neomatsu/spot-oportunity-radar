@@ -13,6 +13,7 @@ from data.database import (
 from data.repositories.alerts_repo import AlertsRepository
 from data.repositories.trade_intents_repo import TradeIntentsRepository
 from services.alert_service import AlertService
+from services.rsi_cycle_alerts_service import RSICycleAlertSignal
 
 
 def _seed_actionable_asset(
@@ -328,3 +329,78 @@ def test_sell_alerts_are_deduplicated(db_session) -> None:
     assert first.alerts_created >= 1
     assert second.alerts_deduplicated >= 1
     assert len([alert for alert in alerts if alert.alert_type == "take_profit"]) == 1
+
+
+def test_rsi_cycle_alert_is_generated_for_latest_signal(db_session, monkeypatch) -> None:
+    _seed_actionable_asset(
+        db_session,
+        symbol="BTCUSDT",
+        recommendation="WATCH",
+        score=55,
+        risk=42,
+        last_price=65000,
+        rsi14=24,
+        sma50=70000,
+        portfolio_fit_score=55,
+    )
+    service = AlertService(db_session)
+
+    monkeypatch.setattr(
+        service.rsi_cycle_alerts_service,
+        "detect_latest_signals",
+        lambda frame: [
+            RSICycleAlertSignal(
+                event_type="buy_rsi_25",
+                signal_date=date.today(),
+                rsi14=24.1,
+                price=65000.0,
+                severity="high",
+                title="Compra RSI<=25",
+                message="RSI en sobreventa profunda de primer nivel.",
+            )
+        ],
+    )
+
+    summary = service.scan_market_events()
+    alerts = AlertsRepository(db_session).list_recent()
+
+    assert summary.alerts_created >= 1
+    assert any(alert.alert_type == "buy_rsi_25" for alert in alerts)
+
+
+def test_rsi_cycle_alerts_are_deduplicated(db_session, monkeypatch) -> None:
+    _seed_actionable_asset(
+        db_session,
+        symbol="ETHUSDT",
+        recommendation="WATCH",
+        score=52,
+        risk=45,
+        last_price=3200,
+        rsi14=78,
+        sma50=2900,
+    )
+    service = AlertService(db_session)
+
+    monkeypatch.setattr(
+        service.rsi_cycle_alerts_service,
+        "detect_latest_signals",
+        lambda frame: [
+            RSICycleAlertSignal(
+                event_type="sell_rsi_80",
+                signal_date=date.today(),
+                rsi14=81.2,
+                price=3200.0,
+                severity="high",
+                title="Venta RSI>=80",
+                message="RSI en sobrecompra extrema de segundo nivel.",
+            )
+        ],
+    )
+
+    first = service.scan_market_events()
+    second = service.scan_market_events()
+    alerts = AlertsRepository(db_session).list_recent()
+
+    assert first.alerts_created >= 1
+    assert second.alerts_deduplicated >= 1
+    assert len([alert for alert in alerts if alert.alert_type == "sell_rsi_80"]) == 1

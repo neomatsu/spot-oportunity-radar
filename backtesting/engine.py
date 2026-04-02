@@ -73,6 +73,14 @@ class BacktestEngine:
                 cash_curve,
                 portfolio_summary,
             ) = self._run_portfolio_realistic_mode(assets, frames, scenario)
+        elif scenario.mode == BacktestMode.RSI_CYCLE_STRATEGY:
+            (
+                trades,
+                portfolio_events,
+                equity_curve,
+                cash_curve,
+                portfolio_summary,
+            ) = self._run_rsi_cycle_strategy_mode(assets, frames, scenario)
         elif scenario.mode == BacktestMode.PORTFOLIO:
             trades = self._run_portfolio_mode(assets, frames, scenario)
         else:
@@ -672,6 +680,232 @@ class BacktestEngine:
 
         return trades, portfolio_events, equity_curve, cash_curve, portfolio_summary
 
+    def _run_rsi_cycle_strategy_mode(
+        self,
+        assets: list[AssetORM],
+        frames: dict[int, pd.DataFrame],
+        scenario: BacktestScenario,
+    ) -> tuple[
+        list[SimulatedTrade],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        dict[str, Any],
+    ]:
+        trades: list[SimulatedTrade] = []
+        portfolio_events: list[dict[str, Any]] = []
+        equity_curve: list[dict[str, Any]] = []
+        cash_curve: list[dict[str, Any]] = []
+        holdings: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        cash = float(scenario.initial_capital)
+        realized_pnl = 0.0
+        max_concentration = 0.0
+        daily_position_counts: list[int] = []
+        daily_exposures: list[float] = []
+        event_counts = defaultdict(int)
+
+        asset_by_id = {asset.id: asset for asset in assets}
+        enriched_frames: dict[int, pd.DataFrame] = {}
+        state_by_asset: dict[int, dict[str, Any]] = {}
+
+        for asset in assets:
+            frame = frames[asset.id].copy()
+            if frame.empty:
+                continue
+            enriched = self.technical_service.compute_indicators(frame)
+            enriched_frames[asset.id] = enriched.reset_index(drop=True)
+            state_by_asset[asset.id] = self._init_rsi_cycle_state()
+
+        calendar = sorted(
+            {
+                pd.Timestamp(row["date"]).date()
+                for frame in enriched_frames.values()
+                for _, row in frame.iterrows()
+                if scenario.start_date <= pd.Timestamp(row["date"]).date() <= scenario.end_date
+            }
+        )
+
+        for current_date in calendar:
+            rows_by_asset: dict[int, tuple[int, pd.Series]] = {}
+            for asset in assets:
+                frame = enriched_frames.get(asset.id)
+                if frame is None or frame.empty:
+                    continue
+                matching = frame.index[frame["date"].dt.date == current_date]
+                if len(matching) > 0:
+                    rows_by_asset[asset.id] = (int(matching[0]), frame.iloc[int(matching[0])])
+
+            market_values = self._current_market_values(holdings, rows_by_asset)
+            total_equity = cash + sum(market_values.values())
+            exposure = self._exposure_from_market_values(
+                asset_by_id=asset_by_id,
+                market_values=market_values,
+                total_equity=total_equity,
+            )
+
+            for asset in assets:
+                row_payload = rows_by_asset.get(asset.id)
+                if row_payload is None:
+                    continue
+                index, row = row_payload
+                state = state_by_asset[asset.id]
+                events = self._rsi_cycle_events_for_bar(
+                    frame=enriched_frames[asset.id],
+                    index=index,
+                    state=state,
+                    rules=scenario.rsi_cycle_rules,
+                )
+                buy_event_type = self._select_rsi_cycle_event(events, side="buy")
+                sell_event_type = self._select_rsi_cycle_event(events, side="sell")
+                existing_lots = holdings.get(asset.id, [])
+
+                if sell_event_type is not None and existing_lots:
+                    sale_result = self._execute_rsi_cycle_sale(
+                        asset=asset,
+                        row=row,
+                        event_type=sell_event_type,
+                        lots=existing_lots,
+                        cash=cash,
+                        initial_capital=scenario.initial_capital,
+                        scenario=scenario,
+                    )
+                    cash = sale_result["cash"]
+                    realized_pnl += sale_result["realized_pnl"]
+                    trades.extend(sale_result["trades"])
+                    if sale_result["event"] is not None:
+                        portfolio_events.append(sale_result["event"])
+                        event_counts[sell_event_type] += 1
+                    if not existing_lots:
+                        holdings.pop(asset.id, None)
+                    market_values = self._current_market_values(holdings, rows_by_asset)
+                    total_equity = cash + sum(market_values.values())
+                    exposure = self._exposure_from_market_values(
+                        asset_by_id=asset_by_id,
+                        market_values=market_values,
+                        total_equity=total_equity,
+                    )
+
+                if buy_event_type is not None:
+                    cash, buy_event = self._execute_rsi_cycle_buy(
+                        asset=asset,
+                        row=row,
+                        event_type=buy_event_type,
+                        cash=cash,
+                        holdings=holdings,
+                        total_equity=max(total_equity, cash),
+                        exposure=exposure,
+                        initial_capital=scenario.initial_capital,
+                        scenario=scenario,
+                    )
+                    if buy_event is not None:
+                        portfolio_events.append(buy_event)
+                        event_counts[buy_event_type] += 1
+                        market_values = self._current_market_values(holdings, rows_by_asset)
+                        total_equity = cash + sum(market_values.values())
+                        exposure = self._exposure_from_market_values(
+                            asset_by_id=asset_by_id,
+                            market_values=market_values,
+                            total_equity=total_equity,
+                        )
+
+            market_values = self._current_market_values(holdings, rows_by_asset)
+            total_equity = cash + sum(market_values.values())
+            unrealized_pnl = self._unrealized_pnl(holdings, rows_by_asset)
+            max_concentration = max(
+                max_concentration,
+                max((value / total_equity) for value in market_values.values())
+                if total_equity > 0 and market_values
+                else 0.0,
+            )
+            daily_position_counts.append(len([lots for lots in holdings.values() if lots]))
+            daily_exposures.append(
+                (sum(market_values.values()) / total_equity) if total_equity > 0 else 0.0
+            )
+            equity_curve.append(
+                {
+                    "date": current_date.isoformat(),
+                    "equity": round(total_equity, 6),
+                    "cash": round(cash, 6),
+                    "invested_value": round(sum(market_values.values()), 6),
+                    "realized_pnl": round(realized_pnl, 6),
+                    "unrealized_pnl": round(unrealized_pnl, 6),
+                    "open_positions": len([lots for lots in holdings.values() if lots]),
+                }
+            )
+            cash_curve.append(
+                {
+                    "date": current_date.isoformat(),
+                    "cash": round(cash, 6),
+                    "cash_pct": round((cash / total_equity) * 100, 4) if total_equity > 0 else 0.0,
+                }
+            )
+
+        final_market_values = self._current_market_values_with_last_known(holdings, enriched_frames)
+        final_equity = equity_curve[-1]["equity"] if equity_curve else scenario.initial_capital
+        portfolio_summary = {
+            "initial_capital": round(float(scenario.initial_capital), 2),
+            "final_capital": round(float(final_equity), 2),
+            "portfolio_return_pct": round(
+                ((float(final_equity) / scenario.initial_capital) - 1) * 100,
+                2,
+            )
+            if scenario.initial_capital > 0
+            else 0.0,
+            "final_cash": round(cash, 2),
+            "realized_pnl": round(realized_pnl, 2),
+            "unrealized_pnl": round(
+                self._unrealized_pnl_with_last_known(holdings, enriched_frames),
+                2,
+            ),
+            "buy_count": sum(1 for event in portfolio_events if event["action"] == "BUY"),
+            "sell_partial_count": sum(
+                1 for event in portfolio_events if event["action"] == "SELL_PARTIAL"
+            ),
+            "sell_full_count": sum(
+                1 for event in portfolio_events if event["action"] == "SELL_FULL"
+            ),
+            "avg_entry_size_pct": round(
+                pd.Series(
+                    [
+                        float(event["payload_json"].get("executed_weight_pct", 0.0))
+                        for event in portfolio_events
+                        if event["action"] == "BUY"
+                    ]
+                ).mean(),
+                2,
+            )
+            if any(event["action"] == "BUY" for event in portfolio_events)
+            else 0.0,
+            "avg_reduction_size_pct": round(
+                pd.Series(
+                    [
+                        float(event["payload_json"].get("sold_fraction_pct", 0.0))
+                        for event in portfolio_events
+                        if event["action"] in {"SELL_PARTIAL", "SELL_FULL"}
+                    ]
+                ).mean(),
+                2,
+            )
+            if any(event["action"] in {"SELL_PARTIAL", "SELL_FULL"} for event in portfolio_events)
+            else 0.0,
+            "average_exposure_pct": round(float(pd.Series(daily_exposures).mean() * 100), 2)
+            if daily_exposures
+            else 0.0,
+            "max_concentration_pct": round(max_concentration * 100, 2),
+            "avg_open_positions": round(float(pd.Series(daily_position_counts).mean()), 2)
+            if daily_position_counts
+            else 0.0,
+            "final_open_positions": len([lots for lots in holdings.values() if lots]),
+            "final_holdings_value": round(sum(final_market_values.values()), 2),
+            "buy_rsi_25_count": int(event_counts["BUY_RSI_25"]),
+            "buy_rsi_20_count": int(event_counts["BUY_RSI_20"]),
+            "buy_bullish_divergence_count": int(event_counts["BUY_BULLISH_DIVERGENCE"]),
+            "sell_rsi_75_count": int(event_counts["SELL_RSI_75"]),
+            "sell_rsi_80_count": int(event_counts["SELL_RSI_80"]),
+            "sell_bearish_divergence_count": int(event_counts["SELL_BEARISH_DIVERGENCE"]),
+        }
+        return trades, portfolio_events, equity_curve, cash_curve, portfolio_summary
+
     def _resolve_exit(
         self,
         *,
@@ -871,6 +1105,220 @@ class BacktestEngine:
         pending_orders[:] = remaining_orders
         return cash
 
+    @staticmethod
+    def _init_rsi_cycle_state() -> dict[str, Any]:
+        return {
+            "oversold_active": False,
+            "overbought_active": False,
+            "buy_rsi_25_used": False,
+            "buy_rsi_20_used": False,
+            "buy_div_used": False,
+            "sell_rsi_75_used": False,
+            "sell_rsi_80_used": False,
+            "sell_div_used": False,
+            "oversold_pivots": [],
+            "overbought_pivots": [],
+            "bullish_divergence_pending": False,
+            "bearish_divergence_pending": False,
+        }
+
+    def _rsi_cycle_events_for_bar(
+        self,
+        *,
+        frame: pd.DataFrame,
+        index: int,
+        state: dict[str, Any],
+        rules,
+    ) -> list[str]:
+        row = frame.iloc[index]
+        rsi = self._optional_float(row.get("rsi14"))
+        if rsi is None:
+            return []
+
+        prev_rsi = None
+        if index > 0:
+            prev_rsi = self._optional_float(frame.iloc[index - 1].get("rsi14"))
+
+        events: list[str] = []
+
+        if rsi < rules.oversold_threshold and not state["oversold_active"]:
+            state["oversold_active"] = True
+            state["buy_rsi_25_used"] = False
+            state["buy_rsi_20_used"] = False
+            state["buy_div_used"] = False
+            state["oversold_pivots"] = []
+            state["bullish_divergence_pending"] = False
+
+        if rsi > rules.overbought_threshold and not state["overbought_active"]:
+            state["overbought_active"] = True
+            state["sell_rsi_75_used"] = False
+            state["sell_rsi_80_used"] = False
+            state["sell_div_used"] = False
+            state["overbought_pivots"] = []
+            state["bearish_divergence_pending"] = False
+
+        if state["oversold_active"]:
+            if not state["buy_rsi_25_used"] and rsi <= rules.deep_oversold_threshold_1:
+                events.append("BUY_RSI_25")
+                state["buy_rsi_25_used"] = True
+            if not state["buy_rsi_20_used"] and rsi <= rules.deep_oversold_threshold_2:
+                events.append("BUY_RSI_20")
+                state["buy_rsi_20_used"] = True
+            pivot = self._confirm_pivot_low(frame, index, rules)
+            if pivot is not None:
+                state["oversold_pivots"].append(pivot)
+                state["oversold_pivots"] = state["oversold_pivots"][-5:]
+                if self._has_bullish_divergence(state["oversold_pivots"], rules):
+                    state["bullish_divergence_pending"] = True
+            bull_confirmed = (
+                state["bullish_divergence_pending"]
+                and not state["buy_div_used"]
+                and (
+                    (not rules.require_confirmation_cross and rsi > rules.oversold_threshold)
+                    or (
+                        rules.require_confirmation_cross
+                        and prev_rsi is not None
+                        and prev_rsi <= rules.oversold_threshold
+                        and rsi > rules.oversold_threshold
+                    )
+                )
+            )
+            if bull_confirmed:
+                events.append("BUY_BULLISH_DIVERGENCE")
+                state["buy_div_used"] = True
+                if rules.max_one_divergence_per_cycle:
+                    state["bullish_divergence_pending"] = False
+            if rsi > rules.oversold_threshold:
+                state["oversold_active"] = False
+                state["oversold_pivots"] = []
+                state["bullish_divergence_pending"] = False
+
+        if state["overbought_active"]:
+            if not state["sell_rsi_75_used"] and rsi >= rules.overbought_threshold_1:
+                events.append("SELL_RSI_75")
+                state["sell_rsi_75_used"] = True
+            if not state["sell_rsi_80_used"] and rsi >= rules.overbought_threshold_2:
+                events.append("SELL_RSI_80")
+                state["sell_rsi_80_used"] = True
+            pivot = self._confirm_pivot_high(frame, index, rules)
+            if pivot is not None:
+                state["overbought_pivots"].append(pivot)
+                state["overbought_pivots"] = state["overbought_pivots"][-5:]
+                if self._has_bearish_divergence(state["overbought_pivots"], rules):
+                    state["bearish_divergence_pending"] = True
+            bear_confirmed = (
+                state["bearish_divergence_pending"]
+                and not state["sell_div_used"]
+                and (
+                    (not rules.require_confirmation_cross and rsi < rules.overbought_threshold)
+                    or (
+                        rules.require_confirmation_cross
+                        and prev_rsi is not None
+                        and prev_rsi >= rules.overbought_threshold
+                        and rsi < rules.overbought_threshold
+                    )
+                )
+            )
+            if bear_confirmed:
+                events.append("SELL_BEARISH_DIVERGENCE")
+                state["sell_div_used"] = True
+                if rules.max_one_divergence_per_cycle:
+                    state["bearish_divergence_pending"] = False
+            if rsi < rules.overbought_threshold:
+                state["overbought_active"] = False
+                state["overbought_pivots"] = []
+                state["bearish_divergence_pending"] = False
+
+        return events
+
+    def _confirm_pivot_low(self, frame: pd.DataFrame, index: int, rules) -> dict[str, Any] | None:
+        if index < 2:
+            return None
+        rsi_prev2 = self._optional_float(frame.iloc[index - 2].get("rsi14"))
+        rsi_prev1 = self._optional_float(frame.iloc[index - 1].get("rsi14"))
+        rsi_now = self._optional_float(frame.iloc[index].get("rsi14"))
+        if rsi_prev2 is None or rsi_prev1 is None or rsi_now is None:
+            return None
+        if not (rsi_prev2 > rsi_prev1 <= rsi_now and rsi_prev1 <= rules.oversold_threshold):
+            return None
+        pivot_index = index - 1
+        pivot_row = frame.iloc[pivot_index]
+        price_field = "low" if rules.pivot_price_source == "extremes" else "close"
+        return {
+            "index": pivot_index,
+            "date": pd.Timestamp(pivot_row["date"]).date(),
+            "rsi": float(rsi_prev1),
+            "price": float(pivot_row[price_field]),
+        }
+
+    def _confirm_pivot_high(self, frame: pd.DataFrame, index: int, rules) -> dict[str, Any] | None:
+        if index < 2:
+            return None
+        rsi_prev2 = self._optional_float(frame.iloc[index - 2].get("rsi14"))
+        rsi_prev1 = self._optional_float(frame.iloc[index - 1].get("rsi14"))
+        rsi_now = self._optional_float(frame.iloc[index].get("rsi14"))
+        if rsi_prev2 is None or rsi_prev1 is None or rsi_now is None:
+            return None
+        if not (rsi_prev2 < rsi_prev1 >= rsi_now and rsi_prev1 >= rules.overbought_threshold):
+            return None
+        pivot_index = index - 1
+        pivot_row = frame.iloc[pivot_index]
+        price_field = "high" if rules.pivot_price_source == "extremes" else "close"
+        return {
+            "index": pivot_index,
+            "date": pd.Timestamp(pivot_row["date"]).date(),
+            "rsi": float(rsi_prev1),
+            "price": float(pivot_row[price_field]),
+        }
+
+    @staticmethod
+    def _has_bullish_divergence(pivots: list[dict[str, Any]], rules) -> bool:
+        if len(pivots) < 2:
+            return False
+        first, second = pivots[-2], pivots[-1]
+        gap = second["index"] - first["index"]
+        return (
+            rules.min_bars_between_pivots <= gap <= rules.max_bars_between_pivots
+            and second["price"] < first["price"]
+            and second["rsi"] > first["rsi"]
+        )
+
+    @staticmethod
+    def _has_bearish_divergence(pivots: list[dict[str, Any]], rules) -> bool:
+        if len(pivots) < 2:
+            return False
+        first, second = pivots[-2], pivots[-1]
+        gap = second["index"] - first["index"]
+        return (
+            rules.min_bars_between_pivots <= gap <= rules.max_bars_between_pivots
+            and second["price"] > first["price"]
+            and second["rsi"] < first["rsi"]
+        )
+
+    @staticmethod
+    def _select_rsi_cycle_event(events: list[str], *, side: str) -> str | None:
+        filtered = [
+            event
+            for event in events
+            if event.startswith("BUY_" if side == "buy" else "SELL_")
+        ]
+        if not filtered:
+            return None
+
+        if side == "buy":
+            priority = {
+                "BUY_RSI_20": 0,
+                "BUY_BULLISH_DIVERGENCE": 1,
+                "BUY_RSI_25": 2,
+            }
+        else:
+            priority = {
+                "SELL_RSI_80": 0,
+                "SELL_BEARISH_DIVERGENCE": 1,
+                "SELL_RSI_75": 2,
+            }
+        return min(filtered, key=lambda event: priority.get(event, 99))
+
     def _build_buy_order(
         self,
         *,
@@ -934,6 +1382,224 @@ class BacktestEngine:
             "signal": signal,
             "execution_side": "buy",
         }
+
+    def _execute_rsi_cycle_buy(
+        self,
+        *,
+        asset: AssetORM,
+        row: pd.Series,
+        event_type: str,
+        cash: float,
+        holdings: dict[int, list[dict[str, Any]]],
+        total_equity: float,
+        exposure: PortfolioExposureModel,
+        initial_capital: float,
+        scenario: BacktestScenario,
+    ) -> tuple[float, dict[str, Any] | None]:
+        rules = scenario.portfolio_simulation_rules
+        rsi_rules = scenario.rsi_cycle_rules
+        has_existing_position = bool(holdings.get(asset.id))
+        if has_existing_position and not rules.allow_add_to_existing:
+            return cash, None
+        if (
+            not has_existing_position
+            and len([lots for lots in holdings.values() if lots]) >= scenario.max_open_positions
+        ):
+            return cash, None
+        event_weight = {
+            "BUY_BULLISH_DIVERGENCE": rsi_rules.buy_pct_bullish_divergence,
+            "BUY_RSI_25": rsi_rules.buy_pct_rsi_25,
+            "BUY_RSI_20": rsi_rules.buy_pct_rsi_20,
+        }.get(event_type, 0.0)
+        desired_value = total_equity * event_weight
+        available_cash = max(0.0, cash - (rules.cash_min_target_pct * total_equity))
+        desired_value = min(desired_value, available_cash)
+        if desired_value < rules.min_trade_value:
+            return cash, None
+        current_price = float(row["close"])
+        current_asset_value = sum(
+            lot["remaining_qty"] * current_price for lot in holdings.get(asset.id, [])
+        )
+        if rules.apply_portfolio_limits and total_equity > 0:
+            desired_value = min(
+                desired_value,
+                max(0.0, rules.max_asset_weight * total_equity - current_asset_value),
+                max(
+                    0.0,
+                    rules.max_sector_weight * total_equity
+                    - exposure.by_sector.get(asset.sector, 0.0) * total_equity,
+                ),
+                max(
+                    0.0,
+                    float(rules.max_asset_type_weight.get(asset.asset_type, 1.0)) * total_equity
+                    - exposure.by_asset_type.get(asset.asset_type, 0.0) * total_equity,
+                ),
+            )
+        if desired_value < rules.min_trade_value:
+            return cash, None
+
+        exec_price = self._apply_slippage(
+            current_price,
+            scenario.execution_rules.slippage_bps,
+            side="buy",
+        )
+        commission_rate = scenario.execution_rules.commission_bps / 10000
+        quantity = desired_value / (exec_price * (1 + commission_rate))
+        if quantity <= 0:
+            return cash, None
+        notional = quantity * exec_price
+        commission = notional * commission_rate
+        cash_before = cash
+        cash -= notional + commission
+        holdings[asset.id].append(
+            {
+                "entry_signal_date": pd.Timestamp(row["date"]).date(),
+                "entry_date": pd.Timestamp(row["date"]).date(),
+                "entry_price": exec_price,
+                "entry_cost_total": notional + commission,
+                "entry_notional": notional,
+                "remaining_qty": quantity,
+                "asset_type": asset.asset_type,
+                "sector": asset.sector,
+                "recommendation": event_type,
+                "technical_score": 0.0,
+                "risk_score": 0.0,
+                "portfolio_fit_score": 0.0,
+                "final_score": 0.0,
+                "invalidation_level": None,
+                "rationale": {"rsi_cycle_event": event_type},
+                "parameters": scenario.to_payload(),
+            }
+        )
+        event = {
+            "asset_id": asset.id,
+            "symbol": asset.symbol,
+            "event_date": pd.Timestamp(row["date"]).date(),
+            "action": "BUY",
+            "trigger_type": event_type,
+            "quantity": round(quantity, 8),
+            "price": round(exec_price, 4),
+            "gross_value": round(notional, 2),
+            "cash_before": round(cash_before, 2),
+            "cash_after": round(cash, 2),
+            "position_weight_before": exposure.by_asset.get(asset.symbol),
+            "position_weight_after": None,
+            "payload_json": {
+                "executed_weight_pct": round((notional / initial_capital) * 100, 2),
+                "rsi14": self._optional_float(row.get("rsi14")),
+                "event_type": event_type,
+            },
+        }
+        return cash, event
+
+    def _execute_rsi_cycle_sale(
+        self,
+        *,
+        asset: AssetORM,
+        row: pd.Series,
+        event_type: str,
+        lots: list[dict[str, Any]],
+        cash: float,
+        initial_capital: float,
+        scenario: BacktestScenario,
+    ) -> dict[str, Any]:
+        trades: list[SimulatedTrade] = []
+        commission_rate = scenario.execution_rules.commission_bps / 10000
+        exit_price = self._apply_slippage(
+            float(row["close"]),
+            scenario.execution_rules.slippage_bps,
+            side="sell",
+        )
+        current_value = sum(lot["remaining_qty"] * exit_price for lot in lots)
+        reduction_pct = {
+            "SELL_BEARISH_DIVERGENCE": scenario.rsi_cycle_rules.sell_pct_bearish_divergence,
+            "SELL_RSI_75": scenario.rsi_cycle_rules.sell_pct_rsi_75,
+            "SELL_RSI_80": scenario.rsi_cycle_rules.sell_pct_rsi_80,
+        }.get(event_type, 0.0)
+        sell_value = current_value * reduction_pct
+        residual = current_value - sell_value
+        if residual < scenario.portfolio_simulation_rules.min_residual_position_value:
+            sell_value = current_value
+        quantity_to_sell = min(
+            sum(lot["remaining_qty"] for lot in lots),
+            sell_value / exit_price if exit_price > 0 else 0.0,
+        )
+        if quantity_to_sell <= 0:
+            return {"cash": cash, "realized_pnl": 0.0, "trades": [], "event": None}
+        cash_before = cash
+        realized_pnl = 0.0
+        remaining_to_sell = quantity_to_sell
+        total_qty_before = sum(lot["remaining_qty"] for lot in lots)
+        while remaining_to_sell > 1e-9 and lots:
+            lot = lots[0]
+            original_qty = lot["remaining_qty"]
+            sell_qty = min(original_qty, remaining_to_sell)
+            entry_cost_alloc = lot["entry_cost_total"] * (sell_qty / original_qty)
+            entry_notional_alloc = lot["entry_notional"] * (sell_qty / original_qty)
+            gross_proceeds = sell_qty * exit_price
+            sell_commission = gross_proceeds * commission_rate
+            net_proceeds = gross_proceeds - sell_commission
+            gross_return_pct = ((exit_price / lot["entry_price"]) - 1) * 100
+            net_return_pct = ((net_proceeds / entry_cost_alloc) - 1) * 100
+            realized_pnl += net_proceeds - entry_cost_alloc
+            cash += net_proceeds
+            trades.append(
+                SimulatedTrade(
+                    asset_id=asset.id,
+                    symbol=asset.symbol,
+                    name=asset.name,
+                    asset_type=asset.asset_type,
+                    sector=asset.sector,
+                    entry_signal_date=lot["entry_signal_date"],
+                    entry_date=lot["entry_date"],
+                    exit_date=pd.Timestamp(row["date"]).date(),
+                    entry_price=round(lot["entry_price"], 4),
+                    exit_price=round(exit_price, 4),
+                    position_pct=round(entry_notional_alloc / initial_capital, 4),
+                    gross_return_pct=round(gross_return_pct, 2),
+                    net_return_pct=round(net_return_pct, 2),
+                    max_drawdown_pct=0.0,
+                    mae_pct=0.0,
+                    mfe_pct=0.0,
+                    holding_days=(pd.Timestamp(row["date"]).date() - lot["entry_date"]).days,
+                    exit_reason=event_type,
+                    recommendation=lot["recommendation"],
+                    technical_score=lot["technical_score"],
+                    risk_score=lot["risk_score"],
+                    portfolio_fit_score=lot["portfolio_fit_score"],
+                    final_score=lot["final_score"],
+                    invalidation_level=lot["invalidation_level"],
+                    rationale=lot["rationale"],
+                    parameters=lot["parameters"],
+                )
+            )
+            lot["entry_cost_total"] -= entry_cost_alloc
+            lot["entry_notional"] -= entry_notional_alloc
+            lot["remaining_qty"] -= sell_qty
+            remaining_to_sell -= sell_qty
+            if lot["remaining_qty"] <= 1e-9:
+                lots.pop(0)
+
+        position_value_after = sum(lot["remaining_qty"] * exit_price for lot in lots)
+        event = {
+            "asset_id": asset.id,
+            "symbol": asset.symbol,
+            "event_date": pd.Timestamp(row["date"]).date(),
+            "action": "SELL_FULL" if position_value_after <= 0 else "SELL_PARTIAL",
+            "trigger_type": event_type,
+            "quantity": round(quantity_to_sell, 8),
+            "price": round(exit_price, 4),
+            "gross_value": round(quantity_to_sell * exit_price, 2),
+            "cash_before": round(cash_before, 2),
+            "cash_after": round(cash, 2),
+            "position_weight_before": None,
+            "position_weight_after": None,
+            "payload_json": {
+                "sold_fraction_pct": round((quantity_to_sell / total_qty_before) * 100, 2),
+                "rsi14": self._optional_float(row.get("rsi14")),
+            },
+        }
+        return {"cash": cash, "realized_pnl": realized_pnl, "trades": trades, "event": event}
 
     def _execute_buy_order(
         self,

@@ -83,6 +83,12 @@ class NotificationService:
             "exit_candidate": telegram_cfg.get("send_sell_alerts", False),
             "stop_loss_warning": telegram_cfg.get("send_sell_alerts", False),
             "rebalance_sell": telegram_cfg.get("send_sell_alerts", False),
+            "buy_rsi_25": telegram_cfg.get("send_rsi_cycle_alerts", False),
+            "buy_rsi_20": telegram_cfg.get("send_rsi_cycle_alerts", False),
+            "buy_bullish_divergence": telegram_cfg.get("send_rsi_cycle_alerts", False),
+            "sell_rsi_75": telegram_cfg.get("send_rsi_cycle_alerts", False),
+            "sell_rsi_80": telegram_cfg.get("send_rsi_cycle_alerts", False),
+            "sell_bearish_divergence": telegram_cfg.get("send_rsi_cycle_alerts", False),
         }
         return type_flags.get(alert_type, True)
 
@@ -103,6 +109,8 @@ class NotificationService:
             lines.append(f"Precio: {payload['last_price']}")
         if payload.get("profit_pct") is not None:
             lines.append(f"P/L latente: {payload['profit_pct']}%")
+        if payload.get("rsi14") is not None:
+            lines.append(f"RSI14: {payload['rsi14']:.2f}")
         if payload.get("current_weight_pct") is not None:
             lines.append(
                 f"Peso actual: {payload['current_weight_pct']}%"
@@ -118,6 +126,8 @@ class NotificationService:
             lines.append(f"Peso sugerido: {payload['suggested_weight_add']}%")
         if payload.get("action_suggestion"):
             lines.append(f"Accion sugerida: {payload['action_suggestion']}")
+        if payload.get("strategy_name"):
+            lines.append(f"Estrategia: {payload['strategy_name']}")
         if payload.get("invalidation"):
             lines.append(f"Invalidacion: {payload['invalidation']}")
         return "\n".join(lines)

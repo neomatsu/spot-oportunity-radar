@@ -115,3 +115,36 @@ def test_telegram_can_send_take_profit_when_type_is_allowed(monkeypatch) -> None
 
     assert telegram_result.status == "sent"
     assert "take_profit" in sent_payload["json"]["text"]
+
+
+def test_telegram_can_send_rsi_cycle_alert_when_type_is_allowed(monkeypatch) -> None:
+    service = NotificationService()
+    service.config["channels"]["telegram"] = True
+    service.settings.telegram_enabled = True
+    service.settings.telegram_bot_token = "token"
+    service.settings.telegram_chat_id = "chat-id"
+    service.config["telegram"]["enabled_for"] = ["high"]
+    service.config["telegram"]["enabled_alert_types"] = ["buy_rsi_25"]
+
+    sent_payload: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+    def _fake_post(url, json, timeout):
+        sent_payload["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("services.notification_service.httpx.post", _fake_post)
+    alert = _build_alert()
+    alert.alert_type = "buy_rsi_25"
+    alert.payload_json["rsi14"] = 24.12
+    alert.payload_json["strategy_name"] = "rsi_cycle_strategy"
+
+    results = service.send_alert(alert)
+    telegram_result = next(result for result in results if result.channel == "telegram")
+
+    assert telegram_result.status == "sent"
+    assert "buy_rsi_25" in sent_payload["json"]["text"]
+    assert "RSI14: 24.12" in sent_payload["json"]["text"]

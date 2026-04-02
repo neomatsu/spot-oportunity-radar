@@ -79,3 +79,22 @@ portfolio_simulation:
     - take_profit
     - rebalance_sell
     - overbought_warning
+
+rsi_cycle_strategy:
+  oversold_threshold: 30
+  deep_oversold_threshold_1: 25
+  deep_oversold_threshold_2: 20
+  overbought_threshold: 70
+  overbought_threshold_1: 75
+  overbought_threshold_2: 80
+  buy_pct_bullish_divergence: 0.35
+  buy_pct_rsi_25: 0.25
+  buy_pct_rsi_20: 0.40
+  sell_pct_bearish_divergence: 0.35
+  sell_pct_rsi_75: 0.25
+  sell_pct_rsi_80: 0.40
+  min_bars_between_pivots: 3
+  max_bars_between_pivots: 20
+  pivot_price_source: close
+  require_confirmation_cross: true
+  max_one_divergence_per_cycle: true

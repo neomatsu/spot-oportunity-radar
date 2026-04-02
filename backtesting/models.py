@@ -10,6 +10,7 @@ class BacktestMode(StrEnum):
     TRADE_BY_TRADE = "trade_by_trade"
     PORTFOLIO = "portfolio"
     PORTFOLIO_REALISTIC = "portfolio_realistic"
+    RSI_CYCLE_STRATEGY = "rsi_cycle_strategy"
 
 
 class EntryMode(StrEnum):
@@ -86,6 +87,49 @@ class PortfolioSimulationRules:
 
 
 @dataclass(slots=True)
+class RSICycleRules:
+    oversold_threshold: float
+    deep_oversold_threshold_1: float
+    deep_oversold_threshold_2: float
+    overbought_threshold: float
+    overbought_threshold_1: float
+    overbought_threshold_2: float
+    buy_pct_bullish_divergence: float
+    buy_pct_rsi_25: float
+    buy_pct_rsi_20: float
+    sell_pct_bearish_divergence: float
+    sell_pct_rsi_75: float
+    sell_pct_rsi_80: float
+    min_bars_between_pivots: int
+    max_bars_between_pivots: int
+    pivot_price_source: str
+    require_confirmation_cross: bool
+    max_one_divergence_per_cycle: bool
+
+
+def default_rsi_cycle_rules() -> RSICycleRules:
+    return RSICycleRules(
+        oversold_threshold=30.0,
+        deep_oversold_threshold_1=25.0,
+        deep_oversold_threshold_2=20.0,
+        overbought_threshold=70.0,
+        overbought_threshold_1=75.0,
+        overbought_threshold_2=80.0,
+        buy_pct_bullish_divergence=0.35,
+        buy_pct_rsi_25=0.25,
+        buy_pct_rsi_20=0.40,
+        sell_pct_bearish_divergence=0.35,
+        sell_pct_rsi_75=0.25,
+        sell_pct_rsi_80=0.40,
+        min_bars_between_pivots=3,
+        max_bars_between_pivots=20,
+        pivot_price_source="close",
+        require_confirmation_cross=True,
+        max_one_divergence_per_cycle=True,
+    )
+
+
+@dataclass(slots=True)
 class BacktestScenario:
     name: str
     mode: BacktestMode
@@ -102,6 +146,7 @@ class BacktestScenario:
     execution_rules: ExecutionRules
     evaluation_rules: EvaluationRules
     portfolio_simulation_rules: PortfolioSimulationRules
+    rsi_cycle_rules: RSICycleRules = field(default_factory=default_rsi_cycle_rules)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -163,6 +208,25 @@ class BacktestScenario:
                     self.portfolio_simulation_rules.sell_reduction_by_alert_type
                 ),
                 "sell_priority": list(self.portfolio_simulation_rules.sell_priority),
+            },
+            "rsi_cycle_rules": {
+                "oversold_threshold": self.rsi_cycle_rules.oversold_threshold,
+                "deep_oversold_threshold_1": self.rsi_cycle_rules.deep_oversold_threshold_1,
+                "deep_oversold_threshold_2": self.rsi_cycle_rules.deep_oversold_threshold_2,
+                "overbought_threshold": self.rsi_cycle_rules.overbought_threshold,
+                "overbought_threshold_1": self.rsi_cycle_rules.overbought_threshold_1,
+                "overbought_threshold_2": self.rsi_cycle_rules.overbought_threshold_2,
+                "buy_pct_bullish_divergence": self.rsi_cycle_rules.buy_pct_bullish_divergence,
+                "buy_pct_rsi_25": self.rsi_cycle_rules.buy_pct_rsi_25,
+                "buy_pct_rsi_20": self.rsi_cycle_rules.buy_pct_rsi_20,
+                "sell_pct_bearish_divergence": self.rsi_cycle_rules.sell_pct_bearish_divergence,
+                "sell_pct_rsi_75": self.rsi_cycle_rules.sell_pct_rsi_75,
+                "sell_pct_rsi_80": self.rsi_cycle_rules.sell_pct_rsi_80,
+                "min_bars_between_pivots": self.rsi_cycle_rules.min_bars_between_pivots,
+                "max_bars_between_pivots": self.rsi_cycle_rules.max_bars_between_pivots,
+                "pivot_price_source": self.rsi_cycle_rules.pivot_price_source,
+                "require_confirmation_cross": self.rsi_cycle_rules.require_confirmation_cross,
+                "max_one_divergence_per_cycle": self.rsi_cycle_rules.max_one_divergence_per_cycle,
             },
         }
 

@@ -85,6 +85,31 @@ def _make_scenario(asset_symbol: str) -> object:
     )
 
 
+def _make_rsi_frame(
+    rsi_values: list[float],
+    *,
+    close_values: list[float] | None = None,
+    start: str = "2024-01-01",
+) -> pd.DataFrame:
+    close_series = close_values or [100.0 + idx for idx, _ in enumerate(rsi_values)]
+    dates = pd.bdate_range(start, periods=len(rsi_values))
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close_series,
+            "high": [value + 1 for value in close_series],
+            "low": [value - 1 for value in close_series],
+            "close": close_series,
+            "volume": [1000 + idx for idx in range(len(rsi_values))],
+            "rsi14": rsi_values,
+            "sma50": close_series,
+            "sma200": close_series,
+            "ema20": close_series,
+            "atr14": [1.0] * len(rsi_values),
+        }
+    )
+
+
 def test_evaluate_signal_point_does_not_use_future_data(db_session) -> None:
     asset = _seed_asset_with_prices(db_session)
     engine = BacktestEngine(db_session)
@@ -359,3 +384,228 @@ def test_portfolio_realistic_exit_priority_prefers_stop_loss(db_session) -> None
 
     if exit_events:
         assert exit_events[0]["trigger_type"] in {"stop_loss_warning", "exit_candidate"}
+
+
+def test_rsi_cycle_buy_thresholds_trigger_once_per_cycle(db_session) -> None:
+    engine = BacktestEngine(db_session)
+    scenario = _make_scenario("TEST")
+    rules = scenario.rsi_cycle_rules
+    frame = _make_rsi_frame([35, 28, 24, 19, 21, 31, 28, 24, 19, 31])
+    state = engine._init_rsi_cycle_state()
+    events: list[str] = []
+
+    for index in range(len(frame)):
+        events.extend(
+            engine._rsi_cycle_events_for_bar(
+                frame=frame,
+                index=index,
+                state=state,
+                rules=rules,
+            )
+        )
+
+    assert events.count("BUY_RSI_25") == 2
+    assert events.count("BUY_RSI_20") == 2
+
+
+def test_rsi_cycle_sell_thresholds_trigger_once_per_cycle(db_session) -> None:
+    engine = BacktestEngine(db_session)
+    scenario = _make_scenario("TEST")
+    rules = scenario.rsi_cycle_rules
+    frame = _make_rsi_frame([65, 71, 76, 81, 78, 69, 72, 76, 82, 68])
+    state = engine._init_rsi_cycle_state()
+    events: list[str] = []
+
+    for index in range(len(frame)):
+        events.extend(
+            engine._rsi_cycle_events_for_bar(
+                frame=frame,
+                index=index,
+                state=state,
+                rules=rules,
+            )
+        )
+
+    assert events.count("SELL_RSI_75") == 2
+    assert events.count("SELL_RSI_80") == 2
+
+
+def test_bullish_divergence_requires_confirmation_cross(db_session) -> None:
+    engine = BacktestEngine(db_session)
+    scenario = _make_scenario("TEST")
+    rules = scenario.rsi_cycle_rules
+    frame = _make_rsi_frame(
+        [40, 29, 24, 28, 30, 29, 26, 29, 31],
+        close_values=[110, 105, 100, 104, 103, 100, 95, 98, 101],
+    )
+    state = engine._init_rsi_cycle_state()
+    events: list[str] = []
+
+    for index in range(len(frame)):
+        events.extend(
+            engine._rsi_cycle_events_for_bar(
+                frame=frame,
+                index=index,
+                state=state,
+                rules=rules,
+            )
+        )
+
+    assert "BUY_BULLISH_DIVERGENCE" in events
+    assert events.count("BUY_BULLISH_DIVERGENCE") == 1
+
+
+def test_bearish_divergence_requires_confirmation_cross(db_session) -> None:
+    engine = BacktestEngine(db_session)
+    scenario = _make_scenario("TEST")
+    rules = scenario.rsi_cycle_rules
+    frame = _make_rsi_frame(
+        [60, 71, 76, 72, 70, 71, 74, 71, 69],
+        close_values=[100, 104, 108, 106, 107, 109, 112, 110, 107],
+    )
+    state = engine._init_rsi_cycle_state()
+    events: list[str] = []
+
+    for index in range(len(frame)):
+        events.extend(
+            engine._rsi_cycle_events_for_bar(
+                frame=frame,
+                index=index,
+                state=state,
+                rules=rules,
+            )
+        )
+
+    assert "SELL_BEARISH_DIVERGENCE" in events
+    assert events.count("SELL_BEARISH_DIVERGENCE") == 1
+
+
+def test_rsi_cycle_strategy_updates_portfolio_with_buys_and_sales(db_session) -> None:
+    asset = _seed_asset_with_prices(db_session, "RSICYCLE")
+    engine = BacktestEngine(db_session)
+    custom_rsi = [45, 28, 24, 31, 50, 72, 76, 68]
+    custom_close = [100, 97, 95, 99, 104, 112, 116, 110]
+
+    def _fake_indicators(frame: pd.DataFrame) -> pd.DataFrame:
+        length = len(frame)
+        padded_rsi = (custom_rsi + [custom_rsi[-1]] * length)[:length]
+        return frame.assign(
+            rsi14=padded_rsi,
+            sma50=frame["close"],
+            sma200=frame["close"],
+            ema20=frame["close"],
+            atr14=1.0,
+        )
+
+    engine.technical_service.compute_indicators = _fake_indicators  # type: ignore[method-assign]
+
+    base = default_backtest_scenario(
+        assets=[asset.symbol],
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 31),
+    )
+    scenario = scenario_with_overrides(
+        base,
+        mode=BacktestMode.RSI_CYCLE_STRATEGY,
+        rsi_cycle_overrides={
+            "buy_pct_rsi_25": 0.5,
+            "buy_pct_rsi_20": 0.0,
+            "buy_pct_bullish_divergence": 0.0,
+            "sell_pct_rsi_75": 1.0,
+            "sell_pct_rsi_80": 0.0,
+            "sell_pct_bearish_divergence": 0.0,
+        },
+        portfolio_simulation_overrides={
+            "cash_min_target_pct": 0.0,
+            "min_trade_value": 10.0,
+            "allow_add_to_existing": True,
+            "apply_portfolio_limits": False,
+        },
+        execution_overrides={
+            "entry_mode": EntryMode.CLOSE,
+        },
+    )
+    scenario.initial_capital = 10_000
+
+    frame = engine._load_asset_frame(asset, date(2024, 1, 1), date(2024, 1, 31))
+    frame.loc[: len(custom_close) - 1, "close"] = custom_close
+    frame.loc[: len(custom_close) - 1, "open"] = custom_close
+    frame.loc[: len(custom_close) - 1, "high"] = [value + 1 for value in custom_close]
+    frame.loc[: len(custom_close) - 1, "low"] = [value - 1 for value in custom_close]
+
+    original_loader = engine._load_asset_frame
+    engine._load_asset_frame = lambda *_args, **_kwargs: frame.copy()  # type: ignore[method-assign]
+    try:
+        result = engine.run(scenario, persist=False)
+    finally:
+        engine._load_asset_frame = original_loader  # type: ignore[method-assign]
+
+    assert result.portfolio_summary["buy_count"] >= 1
+    assert result.portfolio_summary["sell_full_count"] >= 1
+    assert any(event["trigger_type"] == "BUY_RSI_25" for event in result.portfolio_events)
+    assert any(event["trigger_type"] == "SELL_RSI_75" for event in result.portfolio_events)
+
+
+def test_rsi_cycle_strategy_executes_only_most_extreme_sale_same_day(db_session) -> None:
+    asset = _seed_asset_with_prices(db_session, "RSIPRIO")
+    engine = BacktestEngine(db_session)
+    custom_rsi = [45, 28, 24, 31, 55, 72, 81, 68]
+    custom_close = [100, 97, 95, 99, 104, 112, 118, 110]
+
+    def _fake_indicators(frame: pd.DataFrame) -> pd.DataFrame:
+        length = len(frame)
+        padded_rsi = (custom_rsi + [custom_rsi[-1]] * length)[:length]
+        return frame.assign(
+            rsi14=padded_rsi,
+            sma50=frame["close"],
+            sma200=frame["close"],
+            ema20=frame["close"],
+            atr14=1.0,
+        )
+
+    engine.technical_service.compute_indicators = _fake_indicators  # type: ignore[method-assign]
+
+    base = default_backtest_scenario(
+        assets=[asset.symbol],
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 31),
+    )
+    scenario = scenario_with_overrides(
+        base,
+        mode=BacktestMode.RSI_CYCLE_STRATEGY,
+        rsi_cycle_overrides={
+            "buy_pct_rsi_25": 0.5,
+            "buy_pct_rsi_20": 0.0,
+            "buy_pct_bullish_divergence": 0.0,
+            "sell_pct_rsi_75": 0.25,
+            "sell_pct_rsi_80": 0.40,
+            "sell_pct_bearish_divergence": 0.0,
+        },
+        portfolio_simulation_overrides={
+            "cash_min_target_pct": 0.0,
+            "min_trade_value": 10.0,
+            "allow_add_to_existing": True,
+            "apply_portfolio_limits": False,
+        },
+        execution_overrides={
+            "entry_mode": EntryMode.CLOSE,
+        },
+    )
+    scenario.initial_capital = 10_000
+
+    frame = engine._load_asset_frame(asset, date(2024, 1, 1), date(2024, 1, 31))
+    frame.loc[: len(custom_close) - 1, "close"] = custom_close
+    frame.loc[: len(custom_close) - 1, "open"] = custom_close
+    frame.loc[: len(custom_close) - 1, "high"] = [value + 1 for value in custom_close]
+    frame.loc[: len(custom_close) - 1, "low"] = [value - 1 for value in custom_close]
+
+    original_loader = engine._load_asset_frame
+    engine._load_asset_frame = lambda *_args, **_kwargs: frame.copy()  # type: ignore[method-assign]
+    try:
+        result = engine.run(scenario, persist=False)
+    finally:
+        engine._load_asset_frame = original_loader  # type: ignore[method-assign]
+
+    sell_events = [event for event in result.portfolio_events if event["action"].startswith("SELL")]
+    assert len(sell_events) == 1
+    assert sell_events[0]["trigger_type"] == "SELL_RSI_80"
