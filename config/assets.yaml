@@ -209,3 +209,17 @@ assets:
     region: Global
     enabled: true
     supports_fundamentals: false
+  - symbol: HYPEUSDT
+    name: Hyperliquid
+    asset_type: crypto
+    sector: Crypto
+    region: Global
+    enabled: true
+    supports_fundamentals: false
+  - symbol: TAOUSDT
+    name: Bittensor
+    asset_type: crypto
+    sector: Crypto
+    region: Global
+    enabled: true
+    supports_fundamentals: false

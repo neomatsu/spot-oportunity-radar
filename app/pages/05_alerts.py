@@ -18,8 +18,8 @@ from services.alert_service import AlertService  # noqa: E402
 
 st.title("Alerts")
 st.caption(
-    "Centro operativo de alertas, estado de datos y trade intents. El sistema "
-    "prepara decisiones, pero no ejecuta broker automáticamente."
+    "Centro operativo de alertas, estado de datos y trade intents. "
+    "El sistema prepara decisiones, pero no ejecuta broker automáticamente."
 )
 
 init_db()
@@ -27,16 +27,19 @@ settings = get_settings()
 notifications_cfg = load_yaml_config("notifications.yaml")
 
 action_col1, action_col2 = st.columns(2)
-scan_clicked = action_col1.button("Escanear eventos y generar alertas", use_container_width=True)
+scan_clicked = action_col1.button(
+    "Escanear eventos y generar alertas", use_container_width=True, type="primary"
+)
 send_clicked = action_col2.button("Enviar alertas pendientes", use_container_width=True)
 
 if scan_clicked:
     with session_scope() as session:
         summary = AlertService(session).scan_market_events()
     st.success(
-        f"Scan completado. Eventos: {summary.events_detected}, alertas nuevas: "
-        f"{summary.alerts_created}, deduplicadas: {summary.alerts_deduplicated}, "
-        f"trade intents: {summary.trade_intents_created}."
+        f"Scan completado — {summary.events_detected} eventos, "
+        f"{summary.alerts_created} alertas nuevas, "
+        f"{summary.alerts_deduplicated} deduplicadas, "
+        f"{summary.trade_intents_created} trade intents."
     )
 
 if send_clicked:
@@ -52,37 +55,29 @@ with session_scope() as session:
     notification_logs = alerts_repo.list_notification_logs()
 
 pending_alerts = sum(1 for alert in alerts if alert.status == "new")
-open_intents = sum(
-    1 for intent in intents if intent.status in {"new", "reviewed", "approved"}
-)
-telegram_state = (
-    "on" if settings.telegram_enabled and settings.telegram_bot_token else "off"
-)
+open_intents = sum(1 for intent in intents if intent.status in {"new", "reviewed", "approved"})
+telegram_state = "on" if settings.telegram_enabled and settings.telegram_bot_token else "off"
 
 summary_cols = st.columns(5)
 summary_cols[0].metric("Alertas recientes", len(alerts))
-summary_cols[1].metric("Alertas pendientes", pending_alerts)
+summary_cols[1].metric("Pendientes", pending_alerts)
 summary_cols[2].metric("Trade intents abiertos", open_intents)
 summary_cols[3].metric("Telegram", telegram_state)
 summary_cols[4].metric("Modo demo", "on" if settings.demo_mode else "off")
-
-tab_active, tab_history, tab_intents, tab_config = st.tabs(
-    ["Alertas activas", "Historial", "Trade intents", "Config"]
-)
 
 alerts_df = pd.DataFrame(
     [
         {
             "id": alert.id,
-            "symbol": alert.symbol,
-            "alert_group": (alert.payload_json or {}).get("alert_group", "other"),
-            "alert_type": alert.alert_type,
-            "severity": alert.severity,
-            "title": alert.title,
-            "status": alert.status,
-            "created_at": alert.created_at,
-            "sent_at": alert.sent_at,
-            "channels": ",".join(alert.delivery_channels or []),
+            "Símbolo": alert.symbol,
+            "Grupo": (alert.payload_json or {}).get("alert_group", "other"),
+            "Tipo": alert.alert_type,
+            "Severidad": alert.severity,
+            "Título": alert.title,
+            "Estado": alert.status,
+            "Creada": alert.created_at,
+            "Enviada": alert.sent_at,
+            "Canales": ",".join(alert.delivery_channels or []),
         }
         for alert in alerts
     ]
@@ -91,161 +86,175 @@ intents_df = pd.DataFrame(
     [
         {
             "id": intent.id,
-            "symbol": intent.symbol,
-            "status": intent.status,
-            "recommendation": intent.recommendation,
-            "final_score": intent.final_score,
-            "risk_score": intent.risk_score,
-            "suggested_weight_add": intent.suggested_weight_add,
-            "suggested_capital": intent.suggested_capital,
-            "created_at": intent.created_at,
-            "reviewed_at": intent.reviewed_at,
+            "Símbolo": intent.symbol,
+            "Estado": intent.status,
+            "Recomendación": intent.recommendation,
+            "Score final": intent.final_score,
+            "Risk score": intent.risk_score,
+            "Peso sugerido": intent.suggested_weight_add,
+            "Capital sugerido": intent.suggested_capital,
+            "Creado": intent.created_at,
+            "Revisado": intent.reviewed_at,
         }
         for intent in intents
     ]
 )
 
-alert_severity_options = (
-    sorted(alerts_df["severity"].unique().tolist()) if not alerts_df.empty else []
+tab_active, tab_history, tab_intents, tab_config = st.tabs(
+    ["Alertas activas", "Historial", "Trade intents", "Configuración"]
 )
-alert_group_options = (
-    sorted(alerts_df["alert_group"].unique().tolist()) if not alerts_df.empty else []
-)
-alert_type_options = (
-    sorted(alerts_df["alert_type"].unique().tolist()) if not alerts_df.empty else []
-)
-alert_status_options = (
-    sorted(alerts_df["status"].unique().tolist()) if not alerts_df.empty else []
-)
-default_alert_statuses = [
-    status for status in ["new", "sent"] if status in alert_status_options
-]
 
+# ---- Tab: Alertas activas ----
 with tab_active:
-    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
-    severity_filter = filter_col1.multiselect(
-        "Filtrar severidad",
-        options=alert_severity_options,
-        default=alert_severity_options,
-    )
-    group_filter = filter_col2.multiselect(
-        "Filtrar grupo",
-        options=alert_group_options,
-        default=alert_group_options,
-    )
-    type_filter = filter_col3.multiselect(
-        "Filtrar tipo",
-        options=alert_type_options,
-        default=alert_type_options,
-    )
-    status_filter = filter_col4.multiselect(
-        "Filtrar estado",
-        options=alert_status_options,
-        default=default_alert_statuses,
-    )
-    active_df = alerts_df.copy()
-    if not active_df.empty:
-        if severity_filter:
-            active_df = active_df[active_df["severity"].isin(severity_filter)]
-        if group_filter:
-            active_df = active_df[active_df["alert_group"].isin(group_filter)]
-        if type_filter:
-            active_df = active_df[active_df["alert_type"].isin(type_filter)]
-        if status_filter:
-            active_df = active_df[active_df["status"].isin(status_filter)]
-        st.dataframe(active_df, use_container_width=True, hide_index=True)
-
-        selected_alert_id = st.selectbox(
-            "Detalle de alerta",
-            options=active_df["id"].tolist(),
-            format_func=lambda alert_id: f"Alerta #{alert_id}",
-        )
-        selected_alert = next(alert for alert in alerts if alert.id == selected_alert_id)
-        st.json(selected_alert.payload_json or {})
-
-        new_status = st.selectbox(
-            "Cambiar estado de alerta",
-            ["new", "sent", "acknowledged", "resolved", "ignored"],
-            index=["new", "sent", "acknowledged", "resolved", "ignored"].index(
-                selected_alert.status
-            ),
-        )
-        if st.button("Actualizar estado alerta"):
-            with session_scope() as session:
-                AlertsRepository(session).update_status(selected_alert_id, new_status)
-            st.success("Estado de alerta actualizado.")
-            st.rerun()
+    if alerts_df.empty:
+        st.info("Todavía no hay alertas registradas.")
     else:
-        st.info("Todavia no hay alertas registradas.")
+        severity_options = sorted(alerts_df["Severidad"].unique().tolist())
+        group_options = sorted(alerts_df["Grupo"].unique().tolist())
+        type_options = sorted(alerts_df["Tipo"].unique().tolist())
+        status_options = sorted(alerts_df["Estado"].unique().tolist())
+        default_statuses = [s for s in ["new", "sent"] if s in status_options]
 
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+        severity_filter = filter_col1.multiselect("Severidad", severity_options, default=severity_options)
+        group_filter = filter_col2.multiselect("Grupo", group_options, default=group_options)
+        type_filter = filter_col3.multiselect("Tipo", type_options, default=type_options)
+        active_status_filter = filter_col4.multiselect("Estado", status_options, default=default_statuses)
+
+        active_df = alerts_df.copy()
+        if severity_filter:
+            active_df = active_df[active_df["Severidad"].isin(severity_filter)]
+        if group_filter:
+            active_df = active_df[active_df["Grupo"].isin(group_filter)]
+        if type_filter:
+            active_df = active_df[active_df["Tipo"].isin(type_filter)]
+        if active_status_filter:
+            active_df = active_df[active_df["Estado"].isin(active_status_filter)]
+
+        st.dataframe(active_df.drop(columns=["id"]), use_container_width=True, hide_index=True)
+
+        if not active_df.empty:
+            st.divider()
+            selected_alert_id = st.selectbox(
+                "Seleccionar alerta para ver detalle o cambiar estado",
+                options=active_df["id"].tolist(),
+                format_func=lambda aid: f"#{aid} — {next((a.title for a in alerts if a.id == aid), '')}",
+            )
+            selected_alert = next(alert for alert in alerts if alert.id == selected_alert_id)
+
+            detail_col, action_col = st.columns([2, 1])
+            with action_col:
+                new_status = st.selectbox(
+                    "Cambiar estado",
+                    ["new", "sent", "acknowledged", "resolved", "ignored"],
+                    index=["new", "sent", "acknowledged", "resolved", "ignored"].index(
+                        selected_alert.status
+                    ),
+                    key="alert_status_select",
+                )
+                if st.button("Actualizar estado", use_container_width=True, key="alert_status_btn"):
+                    with session_scope() as session:
+                        AlertsRepository(session).update_status(selected_alert_id, new_status)
+                    st.success("Estado actualizado.")
+                    st.rerun()
+            with detail_col:
+                payload = selected_alert.payload_json or {}
+                key_fields = ["alert_group", "symbol", "score", "rsi", "distance_to_support_pct", "recommendation"]
+                inline_items = {k: payload[k] for k in key_fields if k in payload}
+                if inline_items:
+                    kv_pairs = " · ".join(f"**{k}**: {v}" for k, v in inline_items.items())
+                    st.markdown(kv_pairs)
+                with st.expander("Payload completo", expanded=False):
+                    st.json(payload)
+
+# ---- Tab: Historial ----
 with tab_history:
-    history_df = alerts_df.copy()
-    if not history_df.empty:
-        st.dataframe(history_df, use_container_width=True, hide_index=True)
+    if alerts_df.empty:
+        st.info("Sin historial de alertas todavía.")
+    else:
+        hist_status_filter = st.multiselect(
+            "Filtrar por estado",
+            options=sorted(alerts_df["Estado"].unique()),
+            default=sorted(alerts_df["Estado"].unique()),
+            key="hist_status_filter",
+        )
+        hist_df = alerts_df[alerts_df["Estado"].isin(hist_status_filter)] if hist_status_filter else alerts_df
+        st.dataframe(hist_df.drop(columns=["id"]), use_container_width=True, hide_index=True)
+
         logs_df = pd.DataFrame(
             [
                 {
-                    "alert_id": log.alert_id,
-                    "channel": log.channel,
-                    "status": log.status,
-                    "attempted_at": log.attempted_at,
-                    "error_message": log.error_message,
+                    "Alert ID": log.alert_id,
+                    "Canal": log.channel,
+                    "Estado": log.status,
+                    "Intentado": log.attempted_at,
+                    "Error": log.error_message,
                 }
                 for log in notification_logs
             ]
         )
-        st.subheader("Notification log")
-        st.dataframe(logs_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("Sin historial de alertas todavía.")
+        if not logs_df.empty:
+            st.subheader("Log de notificaciones")
+            st.dataframe(logs_df, use_container_width=True, hide_index=True)
 
+# ---- Tab: Trade intents ----
 with tab_intents:
-    if not intents_df.empty:
-        status_filter = st.multiselect(
-            "Filtrar estados de intent",
-            options=sorted(intents_df["status"].unique()),
-            default=sorted(intents_df["status"].unique()),
-        )
-        filtered_intents = intents_df[intents_df["status"].isin(status_filter)]
-        st.dataframe(filtered_intents, use_container_width=True, hide_index=True)
-
-        selected_intent_id = st.selectbox(
-            "Detalle de trade intent",
-            options=filtered_intents["id"].tolist(),
-            format_func=lambda intent_id: f"Intent #{intent_id}",
-        )
-        selected_intent = next(intent for intent in intents if intent.id == selected_intent_id)
-        st.json(selected_intent.rationale_json or {})
-
-        next_status = st.selectbox(
-            "Cambiar estado intent",
-            ["new", "reviewed", "approved", "rejected", "expired", "executed_manually"],
-            index=[
-                "new",
-                "reviewed",
-                "approved",
-                "rejected",
-                "expired",
-                "executed_manually",
-            ].index(selected_intent.status),
-        )
-        if st.button("Actualizar estado intent"):
-            with session_scope() as session:
-                TradeIntentsRepository(session).update_status(selected_intent_id, next_status)
-            st.success("Estado del trade intent actualizado.")
-            st.rerun()
+    if intents_df.empty:
+        st.info("Todavía no hay trade intents.")
     else:
-        st.info("Todavia no hay trade intents.")
+        intent_status_filter = st.multiselect(
+            "Filtrar estados",
+            options=sorted(intents_df["Estado"].unique()),
+            default=sorted(intents_df["Estado"].unique()),
+            key="intents_status_filter",
+        )
+        filtered_intents = intents_df[intents_df["Estado"].isin(intent_status_filter)]
+        st.dataframe(filtered_intents.drop(columns=["id"]), use_container_width=True, hide_index=True)
 
+        if not filtered_intents.empty:
+            st.divider()
+            selected_intent_id = st.selectbox(
+                "Seleccionar trade intent",
+                options=filtered_intents["id"].tolist(),
+                format_func=lambda iid: f"#{iid} — {next((i.symbol for i in intents if i.id == iid), '')}",
+            )
+            selected_intent = next(intent for intent in intents if intent.id == selected_intent_id)
+
+            intent_detail_col, intent_action_col = st.columns([2, 1])
+            with intent_action_col:
+                next_status = st.selectbox(
+                    "Cambiar estado",
+                    ["new", "reviewed", "approved", "rejected", "expired", "executed_manually"],
+                    index=[
+                        "new", "reviewed", "approved", "rejected", "expired", "executed_manually",
+                    ].index(selected_intent.status),
+                    key="intent_status_select",
+                )
+                if st.button("Actualizar estado", use_container_width=True, key="intent_status_btn"):
+                    with session_scope() as session:
+                        TradeIntentsRepository(session).update_status(selected_intent_id, next_status)
+                    st.success("Estado del trade intent actualizado.")
+                    st.rerun()
+            with intent_detail_col:
+                rationale = selected_intent.rationale_json or {}
+                key_fields = ["final_score", "technical_score", "risk_score", "portfolio_fit_score", "recommendation", "suggested_weight_add"]
+                inline_items = {k: rationale[k] for k in key_fields if k in rationale}
+                if inline_items:
+                    kv_pairs = " · ".join(f"**{k}**: {v}" for k, v in inline_items.items())
+                    st.markdown(kv_pairs)
+                with st.expander("Rationale completo", expanded=False):
+                    st.json(rationale)
+
+# ---- Tab: Configuración ----
 with tab_config:
-    st.write("Resumen de configuracion de notificaciones y alertas")
-    st.json(
-        {
-            "telegram_enabled": settings.telegram_enabled,
-            "telegram_credentials_present": bool(
-                settings.telegram_bot_token and settings.telegram_chat_id
-            ),
-            "notification_channels": notifications_cfg["channels"],
-            "demo_mode": settings.demo_mode,
-        }
+    st.subheader("Configuración de notificaciones")
+    cfg_col1, cfg_col2, cfg_col3 = st.columns(3)
+    cfg_col1.metric("Telegram", "Activado" if settings.telegram_enabled else "Desactivado")
+    cfg_col2.metric(
+        "Credenciales Telegram",
+        "Configuradas" if (settings.telegram_bot_token and settings.telegram_chat_id) else "Faltan",
     )
+    cfg_col3.metric("Modo demo", "Sí" if settings.demo_mode else "No")
+
+    with st.expander("Canales de notificación (detalle)", expanded=False):
+        st.json(notifications_cfg.get("channels", {}))

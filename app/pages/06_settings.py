@@ -13,7 +13,7 @@ from core.config import get_provider_settings, get_settings, load_yaml_config  #
 from data.database import session_scope  # noqa: E402
 from services.watchlist_service import WatchlistService  # noqa: E402
 
-st.title("Settings")
+st.title("Configuración")
 
 settings = get_settings()
 providers = get_provider_settings()
@@ -25,28 +25,33 @@ effective_mode = (
     else ("demo" if settings.demo_mode else "real_only")
 )
 
-st.subheader("App")
-st.json(
-    {
-        "env": settings.env,
-        "db_url": settings.db_url,
-        "config_dir": settings.config_dir,
-        "log_level": settings.log_level,
-        "demo_mode": settings.demo_mode,
-        "effective_mode": effective_mode,
-    }
-)
+# --- App ---
+st.subheader("Aplicación")
+app_col1, app_col2, app_col3, app_col4 = st.columns(4)
+app_col1.metric("Entorno", settings.env)
+app_col2.metric("Modo efectivo", effective_mode)
+app_col3.metric("Demo mode", "Sí" if settings.demo_mode else "No")
+app_col4.metric("Log level", settings.log_level)
+with st.expander("Rutas del sistema", expanded=False):
+    st.markdown(f"- **Base de datos:** `{settings.db_url}`")
+    st.markdown(f"- **Config dir:** `{settings.config_dir}`")
 
-st.subheader("Providers")
-st.json(
-    {
-        "alphavantage_configured": bool(providers.alphavantage_api_key),
-        "fmp_configured": bool(providers.fmp_api_key),
-        "binance_public_api": True,
-        "stock_etf_real_mode_available": real_mode_available,
-    }
-)
+if settings.demo_mode:
+    st.info(
+        "Modo demo activado. Si un proveedor real no está disponible o falla, "
+        "la app puede usar series sintéticas reproducibles para seguir siendo usable."
+    )
 
+# --- Providers ---
+st.subheader("Proveedores de datos")
+prov_col1, prov_col2, prov_col3, prov_col4 = st.columns(4)
+prov_col1.metric("Alpha Vantage", "Configurado" if providers.alphavantage_api_key else "No configurado")
+prov_col2.metric("FMP", "Configurado" if providers.fmp_api_key else "No configurado")
+prov_col3.metric("Binance (público)", "Activo")
+prov_col4.metric("Modo real disponible", "Sí" if real_mode_available else "No")
+
+# --- Data status ---
+st.subheader("Estado de datos")
 with session_scope() as session:
     watchlist_rows = WatchlistService(session).get_watchlist_rows()
 
@@ -58,29 +63,34 @@ for row in watchlist_rows:
         row["freshness_status"], 0
     ) + 1
 
-st.subheader("Data status")
-st.json(
-    {
-        "assets_tracked": len(watchlist_rows),
-        "data_mode_counts": mode_summary,
-        "freshness_counts": freshness_summary,
-    }
-)
+data_col1, data_col2 = st.columns(2)
+with data_col1:
+    st.metric("Activos tracked", len(watchlist_rows))
+    for mode, count in mode_summary.items():
+        st.metric(f"Modo: {mode}", count)
+with data_col2:
+    for status, count in freshness_summary.items():
+        st.metric(f"Frescura: {status}", count)
 
-if settings.demo_mode:
-    st.info(
-        "Modo demo activado. Si un proveedor real no esta disponible o falla, "
-        "la app puede usar series sinteticas reproducibles para seguir siendo usable."
-    )
+# --- Scoring config ---
+with st.expander("Scoring config", expanded=False):
+    scoring_cfg = load_yaml_config("scoring.yaml")
+    for section, values in scoring_cfg.items():
+        st.markdown(f"**{section}**")
+        if isinstance(values, dict):
+            pairs = " · ".join(f"`{k}`: {v}" for k, v in values.items())
+            st.markdown(pairs)
+        else:
+            st.markdown(f"`{values}`")
 
-st.subheader("Scoring config")
-st.json(load_yaml_config("scoring.yaml"))
+# --- Risk rules ---
+with st.expander("Risk rules", expanded=False):
+    st.json(load_yaml_config("risk_rules.yaml"))
 
-st.subheader("Risk rules")
-st.json(load_yaml_config("risk_rules.yaml"))
+# --- Portfolio rules ---
+with st.expander("Portfolio rules", expanded=False):
+    st.json(load_yaml_config("portfolio_rules.yaml"))
 
-st.subheader("Portfolio rules")
-st.json(load_yaml_config("portfolio_rules.yaml"))
-
-st.subheader("Data sources rules")
-st.json(load_yaml_config("data_sources.yaml"))
+# --- Data sources ---
+with st.expander("Data sources", expanded=False):
+    st.json(load_yaml_config("data_sources.yaml"))

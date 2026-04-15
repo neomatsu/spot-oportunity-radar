@@ -69,6 +69,16 @@ def make_service(
         max_staleness_days=5,
         allow_demo_fallback=True,
         preserve_real_data_on_provider_failure=preserve_real_data_on_provider_failure,
+        yfinance_enabled=False,
+        yfinance_as_fallback=False,
+        yfinance_long_history_enabled=False,
+        yfinance_long_history_period="5y",
+        yfinance_normal_history_period="1y",
+        yfinance_long_history_min_rows=1000,
+        yfinance_backfill_asset_types=["stock", "etf"],
+        yfinance_request_pause_seconds=0.5,
+        allow_provider_mixing=True,
+        recent_provider_mix_window_days=90,
         providers_priority={"stock": ["stub"], "etf": ["stub"], "crypto": ["stub"]},
     )
     return MarketDataService(
@@ -548,9 +558,21 @@ def test_market_data_service_skips_fmp_after_subscription_restriction(db_session
         refresh_on_app_start=False,
         equities_refresh_interval_hours=24,
         crypto_refresh_interval_minutes=180,
+        equities_market_day_rollover_hour_local=21,
+        equities_market_day_rollover_minute_local=30,
         max_staleness_days=5,
         allow_demo_fallback=True,
         preserve_real_data_on_provider_failure=True,
+        yfinance_enabled=False,
+        yfinance_as_fallback=False,
+        yfinance_long_history_enabled=False,
+        yfinance_long_history_period="5y",
+        yfinance_normal_history_period="1y",
+        yfinance_long_history_min_rows=1000,
+        yfinance_backfill_asset_types=["stock", "etf"],
+        yfinance_request_pause_seconds=0.5,
+        allow_provider_mixing=True,
+        recent_provider_mix_window_days=90,
         providers_priority={"stock": ["fmp", "alphavantage"], "etf": ["fmp"], "crypto": ["stub"]},
     )
 
@@ -589,3 +611,188 @@ def test_equity_freshness_is_fresh_before_cutoff_with_previous_business_day(db_s
     latest_date = date(2026, 3, 27)
 
     assert service._is_equity_data_fresh(latest_date, current_local) is True
+
+
+def test_yfinance_fallback_is_used_when_primary_provider_fails(db_session) -> None:
+    asset = make_asset(db_session, symbol="MSFT")
+    primary_provider = StubProvider("fmp", error=ProviderError("boom"))
+    yfinance_provider = StubProvider(
+        "yfinance",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": date.today() - timedelta(days=2),
+                    "open": 100,
+                    "high": 101,
+                    "low": 99,
+                    "close": 100.5,
+                    "volume": 1000,
+                },
+                {
+                    "date": date.today() - timedelta(days=1),
+                    "open": 101,
+                    "high": 102,
+                    "low": 100,
+                    "close": 101.5,
+                    "volume": 1200,
+                },
+            ]
+        ),
+    )
+
+    settings = SimpleNamespace(demo_mode=True)
+    data_config = SimpleNamespace(
+        prefer_cached_data=False,
+        refresh_on_app_start=False,
+        equities_refresh_interval_hours=24,
+        crypto_refresh_interval_minutes=180,
+        equities_market_day_rollover_hour_local=21,
+        equities_market_day_rollover_minute_local=30,
+        max_staleness_days=5,
+        allow_demo_fallback=True,
+        preserve_real_data_on_provider_failure=True,
+        yfinance_enabled=True,
+        yfinance_as_fallback=True,
+        yfinance_long_history_enabled=False,
+        yfinance_long_history_period="5y",
+        yfinance_normal_history_period="1y",
+        yfinance_long_history_min_rows=1000,
+        yfinance_backfill_asset_types=["stock", "etf"],
+        yfinance_request_pause_seconds=0.5,
+        allow_provider_mixing=True,
+        recent_provider_mix_window_days=90,
+        providers_priority={
+            "stock": ["fmp", "yfinance"],
+            "etf": ["fmp", "yfinance"],
+            "crypto": ["stub"],
+        },
+    )
+    service = MarketDataService(
+        db_session,
+        settings=settings,
+        data_config=data_config,
+        providers={"fmp": primary_provider, "yfinance": yfinance_provider},
+    )
+
+    result = service.refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    assert result.provider_name == "yfinance"
+    assert primary_provider.called == 1
+    assert yfinance_provider.called == 1
+    latest_row = (
+        db_session.query(PriceBarDailyORM)
+        .filter_by(asset_id=asset.id)
+        .order_by(PriceBarDailyORM.date.desc())
+        .first()
+    )
+    assert latest_row is not None
+    assert latest_row.provider == "yfinance"
+
+
+def test_yfinance_long_history_backfill_inserts_older_rows_without_duplicates(db_session) -> None:
+    asset = make_asset(db_session, symbol="MSFT")
+    recent_start = date.today() - timedelta(days=119)
+    provider_rows = []
+    for offset in range(120):
+        current_date = recent_start + timedelta(days=offset)
+        provider_rows.append(
+            {
+                "date": current_date,
+                "open": 100 + offset,
+                "high": 101 + offset,
+                "low": 99 + offset,
+                "close": 100.5 + offset,
+                "volume": 1000 + offset,
+            }
+        )
+    primary_provider = StubProvider("fmp", frame=pd.DataFrame(provider_rows))
+
+    class BackfillProvider(StubProvider):
+        def __init__(self) -> None:
+            long_rows = []
+            long_start = date.today() - timedelta(days=399)
+            for offset in range(400):
+                current_date = long_start + timedelta(days=offset)
+                long_rows.append(
+                    {
+                        "date": current_date,
+                        "open": 50 + offset,
+                        "high": 51 + offset,
+                        "low": 49 + offset,
+                        "close": 50.5 + offset,
+                        "volume": 2000 + offset,
+                    }
+                )
+            super().__init__("yfinance", frame=pd.DataFrame(long_rows))
+
+        def fetch_daily_prices_for_history(
+            self,
+            asset,
+            *,
+            start_date=None,
+            end_date=None,
+            period=None,
+        ):
+            self.called += 1
+            return self.frame.copy()
+
+    yfinance_provider = BackfillProvider()
+    settings = SimpleNamespace(demo_mode=True)
+    data_config = SimpleNamespace(
+        prefer_cached_data=False,
+        refresh_on_app_start=False,
+        equities_refresh_interval_hours=24,
+        crypto_refresh_interval_minutes=180,
+        equities_market_day_rollover_hour_local=21,
+        equities_market_day_rollover_minute_local=30,
+        max_staleness_days=5,
+        allow_demo_fallback=True,
+        preserve_real_data_on_provider_failure=True,
+        yfinance_enabled=True,
+        yfinance_as_fallback=True,
+        yfinance_long_history_enabled=True,
+        yfinance_long_history_period="5y",
+        yfinance_normal_history_period="1y",
+        yfinance_long_history_min_rows=300,
+        yfinance_backfill_asset_types=["stock", "etf"],
+        yfinance_request_pause_seconds=0.5,
+        allow_provider_mixing=True,
+        recent_provider_mix_window_days=90,
+        providers_priority={
+            "stock": ["fmp", "yfinance"],
+            "etf": ["fmp", "yfinance"],
+            "crypto": ["stub"],
+        },
+    )
+    service = MarketDataService(
+        db_session,
+        settings=settings,
+        data_config=data_config,
+        providers={"fmp": primary_provider, "yfinance": yfinance_provider},
+    )
+
+    result = service.refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    assert primary_provider.called == 1
+    assert yfinance_provider.called == 1
+    assert db_session.query(PriceBarDailyORM).filter_by(asset_id=asset.id).count() == 400
+    oldest_row = (
+        db_session.query(PriceBarDailyORM)
+        .filter_by(asset_id=asset.id)
+        .order_by(PriceBarDailyORM.date.asc())
+        .first()
+    )
+    newest_row = (
+        db_session.query(PriceBarDailyORM)
+        .filter_by(asset_id=asset.id)
+        .order_by(PriceBarDailyORM.date.desc())
+        .first()
+    )
+    assert oldest_row.provider == "yfinance"
+    assert newest_row.provider == "fmp"
+    status = db_session.query(AssetDataStatusORM).filter_by(asset_id=asset.id).one()
+    assert status.historical_coverage_start == oldest_row.date
+    assert status.historical_coverage_end == newest_row.date
+    assert status.recent_provider_mix is False

@@ -6,6 +6,55 @@ weights:
 technical:
   max_score: 100
   min_score: 0
+  rsi_contextual:
+    oversold_threshold: 35
+    neutral_threshold: 60
+    oversold_uptrend: 28
+    oversold_shock: 24
+    oversold_neutral: 18
+    oversold_downtrend: 8
+    neutral_uptrend: 14
+    neutral_shock: 14
+    neutral_neutral: 10
+    neutral_downtrend: 4
+    overbought_any: 0
+  market_regime:
+    shock_rsi_threshold: 35
+    shock_ema_below_sma50_pct: 0.03
+    shock_atr_multiplier: 1.5
+  support_distance:
+    max_points: 28
+    decay: 0.35
+    negative_distance_score: 0
+    missing_distance_score_ratio: 0.25
+    overshoot_near_support_score_ratio: 0.4
+    atr_proximity_bonus_multiplier: 1.1
+  trend:
+    golden_cross_bonus: 8  # optimizado via backtesting 2023-2024 (era 12, +3.15 score OOS)
+    death_cross_penalty: -6
+    price_above_sma200: 6
+    price_below_sma200: -4
+    ema20_above_sma50: 12
+    ema20_below_sma50: -2
+  momentum_52w:
+    max_points: 16
+    optimal_min_position: 0.15
+    optimal_max_position: 0.40
+    low_confirmation_position: 0.10
+    mid_position: 0.60
+    overextended_position: 0.75
+    position_weight: 1.00
+    roc_weight: 0.00      # backtesting 2023-2024 y 2022-2025: ROC no mejora expectancy vs baseline
+    roc_threshold_pct: 5.0  # umbral optimo en estudios de volatilidad alta (roc30_thr5)
+  volume_confirmation:
+    max_points: 0               # desactivado: vol_ratio no es direccional, empeora 2022-2025
+    high_threshold: 1.5         # vol_ratio >= 1.5x media → confirmacion fuerte
+    normal_high_threshold: 1.0  # vol_ratio 1.0-1.5x → por encima de la media
+    low_threshold: 0.7          # vol_ratio < 0.7x → volumen bajo, señal debil
+    normal_high_ratio: 0.60
+    normal_ratio: 0.40
+    low_ratio: 0.10
+    missing_ratio: 0.30         # pendiente: implementar volumen direccional (OBV / price-weighted)
   rsi:
     very_positive_max: 30
     positive_max: 40
@@ -43,3 +92,20 @@ recommendation_thresholds:
   watch_min: 45
   max_buy_candidate_risk_score: 68
   max_watch_risk_score: 85
+
+adaptive_weights:
+  enabled: true
+  low_risk_threshold: 45
+  high_risk_threshold: 70
+  low_risk:
+    technical: 0.55
+    risk: 0.20
+    portfolio_fit: 0.25
+  medium_risk:
+    technical: 0.50
+    risk: 0.30
+    portfolio_fit: 0.20
+  high_risk:
+    technical: 0.40
+    risk: 0.40
+    portfolio_fit: 0.20

@@ -7,12 +7,27 @@ equities_market_day_rollover_minute_local: 30
 max_staleness_days: 5
 allow_demo_fallback: true
 preserve_real_data_on_provider_failure: true
+yfinance_enabled: true
+yfinance_as_fallback: true
+yfinance_long_history_enabled: true
+yfinance_long_history_period: 5y
+yfinance_normal_history_period: 1y
+yfinance_long_history_min_rows: 1000
+yfinance_backfill_asset_types:
+  - stock
+  - etf
+yfinance_request_pause_seconds: 0.5
+allow_provider_mixing: true
+recent_provider_mix_window_days: 90
 providers_priority:
   stock:
     - fmp
+    - yfinance
     - alphavantage
   etf:
     - fmp
+    - yfinance
     - alphavantage
   crypto:
     - binance
+    - bybit

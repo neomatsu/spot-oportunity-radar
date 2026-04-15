@@ -13,8 +13,10 @@ from data.database import AssetORM
 from data.providers.alphavantage_provider import AlphaVantageProvider
 from data.providers.base_provider import MarketDataProvider, ProviderError
 from data.providers.binance_provider import BinanceProvider
+from data.providers.bybit_provider import BybitProvider
 from data.providers.demo_provider import DemoMarketDataProvider
 from data.providers.fmp_provider import FinancialModelingPrepProvider
+from data.providers.yfinance_provider import YFinanceProvider
 from data.repositories.data_status_repo import (
     AssetDataStatusRepository,
     DataRefreshLogRepository,
@@ -60,7 +62,11 @@ class MarketDataService:
         self.refresh_log_repo = DataRefreshLogRepository(session)
         self.providers = providers or {
             "binance": BinanceProvider(),
+            "bybit": BybitProvider(),
             "fmp": FinancialModelingPrepProvider(),
+            "yfinance": YFinanceProvider(
+                default_period=self.data_config.yfinance_normal_history_period
+            ),
             "alphavantage": AlphaVantageProvider(),
         }
         self.demo_provider = demo_provider or DemoMarketDataProvider()
@@ -73,12 +79,17 @@ class MarketDataService:
         data_mode = self._normalize_data_mode(status.data_mode)
         freshness = self._determine_freshness(asset, latest_date, status.last_successful_refresh_at)
 
+        is_demo_data = data_mode == DataMode.DEMO.value
+
         if (
             cached_count
             and self.data_config.prefer_cached_data
             and not force
             and freshness == "fresh"
+            and not is_demo_data  # datos demo nunca se sirven desde caché: siempre intentar real
         ):
+            self._maybe_backfill_long_history(asset, status)
+            refreshed_status = self.status_repo.get(asset.id)
             message = f"{asset.symbol} served from cached {data_mode} data; no refresh needed."
             logger.info(message)
             self.status_repo.update_status(
@@ -86,6 +97,12 @@ class MarketDataService:
                 last_available_bar_date=latest_date,
                 freshness_status=freshness,
                 last_refresh_status="cache_hit",
+                historical_coverage_start=self.prices_repo.earliest_date(asset.id),
+                historical_coverage_end=self.prices_repo.latest_date(asset.id),
+                recent_provider_mix=self.prices_repo.has_recent_provider_mix(
+                    asset.id,
+                    self.data_config.recent_provider_mix_window_days,
+                ),
             )
             self.refresh_log_repo.add_log(
                 asset_id=asset.id,
@@ -99,16 +116,20 @@ class MarketDataService:
                 asset_id=asset.id,
                 symbol=asset.symbol,
                 status="cache_hit",
-                provider_name=status.last_refresh_source,
+                provider_name=(
+                    refreshed_status.last_refresh_source
+                    if refreshed_status
+                    else status.last_refresh_source
+                ),
                 rows_stored=0,
                 message=message,
                 data_mode=data_mode,
                 freshness_status=freshness,
-                last_available_bar_date=latest_date,
+                last_available_bar_date=self.prices_repo.latest_date(asset.id),
                 api_called=False,
             )
 
-        provider_candidates = self._provider_candidates(asset)
+        provider_candidates = self._provider_candidates(asset, pinned_provider=status.primary_provider)
         if not provider_candidates:
             return self._handle_no_provider(
                 asset=asset,
@@ -144,13 +165,35 @@ class MarketDataService:
                     real_frame=frame,
                 )
                 if replace_history:
-                    self.prices_repo.replace_asset_prices(asset.id, frame)
+                    self.prices_repo.replace_asset_prices(
+                        asset.id,
+                        frame,
+                        provider_name=provider.name,
+                        is_adjusted=False,
+                    )
                     inserted_rows = len(frame)
                     next_mode = DataMode.REAL.value
                 else:
-                    inserted_rows = self.prices_repo.upsert_asset_prices(asset.id, frame)
+                    inserted_rows = self.prices_repo.upsert_asset_prices(
+                        asset.id,
+                        frame,
+                        provider_name=provider.name,
+                        is_adjusted=False,
+                    )
                     next_mode = self._merge_data_mode(data_mode, DataMode.REAL.value)
+                backfill_rows = self._maybe_backfill_long_history(
+                    asset,
+                    status,
+                    preferred_provider=provider.name,
+                )
                 latest_after_refresh = self.prices_repo.latest_date(asset.id)
+                earliest_after_refresh = self.prices_repo.earliest_date(asset.id)
+                primary_provider = provider.name  # always pin to the provider that just worked
+                baseline_provider = status.historical_provider_baseline or primary_provider
+                recent_provider_mix = self.prices_repo.has_recent_provider_mix(
+                    asset.id,
+                    self.data_config.recent_provider_mix_window_days,
+                )
                 self.status_repo.update_status(
                     asset.id,
                     last_available_bar_date=latest_after_refresh,
@@ -158,6 +201,11 @@ class MarketDataService:
                     last_successful_refresh_at=utc_now(),
                     last_refresh_status="success",
                     last_refresh_source=provider.name,
+                    primary_provider=primary_provider,
+                    historical_provider_baseline=baseline_provider,
+                    historical_coverage_start=earliest_after_refresh,
+                    historical_coverage_end=latest_after_refresh,
+                    recent_provider_mix=recent_provider_mix,
                     data_mode=next_mode,
                     freshness_status=FreshnessStatus.FRESH.value,
                     last_error_message=None,
@@ -171,11 +219,16 @@ class MarketDataService:
                     rows_inserted=inserted_rows,
                 )
                 logger.info(
-                    "%s refreshed from %s; stored %s rows.%s",
+                    "%s refreshed from %s; stored %s rows.%s%s",
                     asset.symbol,
                     provider.name,
                     inserted_rows,
                     f" {refresh_note}" if refresh_note else "",
+                    (
+                        f" Backfilled {backfill_rows} older rows via yfinance."
+                        if backfill_rows
+                        else ""
+                    ),
                 )
                 return PriceRefreshResult(
                     asset_id=asset.id,
@@ -247,16 +300,28 @@ class MarketDataService:
             return frame
         return frame
 
-    def _provider_candidates(self, asset: AssetORM) -> list[MarketDataProvider]:
+    def _provider_candidates(
+        self, asset: AssetORM, pinned_provider: str | None = None
+    ) -> list[MarketDataProvider]:
         configured_priority = self.data_config.providers_priority.get(asset.asset_type, [])
+
+        # Build name order: pinned provider first (if known to work), then configured priority
+        name_order: list[str] = []
+        if pinned_provider and pinned_provider in self.providers:
+            name_order.append(pinned_provider)
+        for name in configured_priority:
+            if name not in name_order:
+                name_order.append(name)
+
         ordered: list[MarketDataProvider] = []
         seen: set[str] = set()
 
-        for provider_name in configured_priority:
+        for provider_name in name_order:
             provider = self.providers.get(provider_name)
             if (
                 provider
                 and provider.supports(asset)
+                and self._provider_enabled(provider_name)
                 and not self._should_skip_provider_for_asset(asset.id, provider.name)
             ):
                 ordered.append(provider)
@@ -265,8 +330,10 @@ class MarketDataService:
         for provider_name, provider in self.providers.items():
             if provider_name in seen:
                 continue
-            if provider.supports(asset) and not self._should_skip_provider_for_asset(
-                asset.id, provider_name
+            if (
+                provider.supports(asset)
+                and self._provider_enabled(provider_name)
+                and not self._should_skip_provider_for_asset(asset.id, provider_name)
             ):
                 ordered.append(provider)
 
@@ -292,6 +359,11 @@ class MarketDataService:
             return True
 
         return False
+
+    def _provider_enabled(self, provider_name: str) -> bool:
+        if provider_name != "yfinance":
+            return True
+        return bool(self.data_config.yfinance_enabled and self.data_config.yfinance_as_fallback)
 
     def _handle_no_provider(
         self,
@@ -448,8 +520,14 @@ class MarketDataService:
         existing_mode: str,
     ) -> PriceRefreshResult:
         frame = self.demo_provider.fetch_daily_prices(asset)
-        inserted_rows = self.prices_repo.upsert_asset_prices(asset.id, frame)
+        inserted_rows = self.prices_repo.upsert_asset_prices(
+            asset.id,
+            frame,
+            provider_name=self.demo_provider.name,
+            is_adjusted=False,
+        )
         latest_date = self.prices_repo.latest_date(asset.id)
+        earliest_date = self.prices_repo.earliest_date(asset.id)
         next_mode = self._merge_data_mode(existing_mode, DataMode.DEMO.value)
         self.status_repo.update_status(
             asset.id,
@@ -458,6 +536,14 @@ class MarketDataService:
             last_successful_refresh_at=utc_now(),
             last_refresh_status="demo_fallback",
             last_refresh_source=self.demo_provider.name,
+            primary_provider=None,
+            historical_provider_baseline=None,
+            historical_coverage_start=earliest_date,
+            historical_coverage_end=latest_date,
+            recent_provider_mix=self.prices_repo.has_recent_provider_mix(
+                asset.id,
+                self.data_config.recent_provider_mix_window_days,
+            ),
             data_mode=next_mode,
             freshness_status=FreshnessStatus.FRESH.value,
             last_error_message=reason,
@@ -483,6 +569,109 @@ class MarketDataService:
             freshness_status=FreshnessStatus.FRESH.value,
             last_available_bar_date=latest_date,
         )
+
+    def _maybe_backfill_long_history(
+        self,
+        asset: AssetORM,
+        status,
+        *,
+        preferred_provider: str | None = None,
+    ) -> int:
+        if (
+            not self.data_config.yfinance_enabled
+            or not self.data_config.yfinance_long_history_enabled
+            or asset.asset_type not in set(self.data_config.yfinance_backfill_asset_types)
+        ):
+            return 0
+
+        row_count = self.prices_repo.row_count(asset.id)
+        if row_count >= self.data_config.yfinance_long_history_min_rows:
+            return 0
+
+        yfinance_provider = self.providers.get("yfinance")
+        if (
+            yfinance_provider is None
+            or not yfinance_provider.supports(asset)
+            or not hasattr(yfinance_provider, "fetch_daily_prices_for_history")
+        ):
+            return 0
+
+        if (
+            not self.data_config.allow_provider_mixing
+            and row_count > 0
+            and status.primary_provider
+            and status.primary_provider != "yfinance"
+        ):
+            logger.info(
+                (
+                    "Skipping yfinance long-history backfill for %s because provider "
+                    "mixing is disabled."
+                ),
+                asset.symbol,
+            )
+            return 0
+
+        earliest_existing = self.prices_repo.earliest_date(asset.id)
+        try:
+            long_frame = yfinance_provider.fetch_daily_prices_for_history(
+                asset,
+                period=self.data_config.yfinance_long_history_period,
+            )
+        except ProviderError as exc:
+            logger.info("Long-history backfill via yfinance skipped for %s: %s", asset.symbol, exc)
+            return 0
+
+        if long_frame.empty:
+            return 0
+
+        if earliest_existing is not None:
+            backfill_frame = long_frame[
+                pd.to_datetime(long_frame["date"]).dt.date < earliest_existing
+            ]
+        else:
+            backfill_frame = long_frame
+
+        if backfill_frame.empty:
+            return 0
+
+        inserted_rows = self.prices_repo.upsert_asset_prices(
+            asset.id,
+            backfill_frame,
+            provider_name="yfinance",
+            is_adjusted=False,
+        )
+        if inserted_rows:
+            current_primary_provider = (
+                status.primary_provider
+                or preferred_provider
+                or status.last_refresh_source
+            )
+            current_baseline = (
+                status.historical_provider_baseline
+                or current_primary_provider
+                or "yfinance"
+            )
+            latest_date = self.prices_repo.latest_date(asset.id)
+            self.status_repo.update_status(
+                asset.id,
+                primary_provider=current_primary_provider,
+                historical_provider_baseline=current_baseline,
+                historical_coverage_start=self.prices_repo.earliest_date(asset.id),
+                historical_coverage_end=latest_date,
+                recent_provider_mix=self.prices_repo.has_recent_provider_mix(
+                    asset.id,
+                    self.data_config.recent_provider_mix_window_days,
+                ),
+            )
+            self.refresh_log_repo.add_log(
+                asset_id=asset.id,
+                provider="yfinance",
+                started_at=utc_now(),
+                finished_at=utc_now(),
+                status="long_history_backfill",
+                rows_inserted=inserted_rows,
+            )
+        return inserted_rows
 
     def _determine_freshness(
         self,

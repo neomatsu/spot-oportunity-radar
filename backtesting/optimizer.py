@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from itertools import product
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,28 @@ from backtesting.scenarios import (
     split_in_sample_out_of_sample,
 )
 from data.repositories.backtest_repo import BacktestRepository
+
+# Maps flat grid keys (scoring_*) to their nested path in scoring.yaml config
+_SCORING_GRID_MAP: dict[str, tuple[str, ...]] = {
+    "scoring_support_decay": ("technical", "support_distance", "decay"),
+    "scoring_rsi_oversold_threshold": ("technical", "rsi_contextual", "oversold_threshold"),
+    "scoring_momentum_optimal_max_position": ("technical", "momentum_52w", "optimal_max_position"),
+    "scoring_trend_golden_cross_bonus": ("technical", "trend", "golden_cross_bonus"),
+    "scoring_roc_weight": ("technical", "momentum_52w", "roc_weight"),
+    "scoring_roc_threshold_pct": ("technical", "momentum_52w", "roc_threshold_pct"),
+    "scoring_volume_max_points": ("technical", "volume_confirmation", "max_points"),
+    "scoring_volume_high_threshold": ("technical", "volume_confirmation", "high_threshold"),
+}
+
+_ENTRY_KEYS = {
+    "min_final_score",
+    "max_risk_score",
+    "max_distance_to_support_pct",
+    "max_rsi14",
+    "require_bullish_trend",
+}
+
+_EXIT_KEYS = {"fixed_horizon_days", "take_profit_pct", "stop_loss_pct"}
 
 
 class BacktestOptimizer:
@@ -60,29 +83,16 @@ class BacktestOptimizer:
 
         for index, values in enumerate(values_product, start=1):
             params = dict(zip(parameter_names, values, strict=True))
-            entry_overrides = {
-                key: value
-                for key, value in params.items()
-                if key
-                in {
-                    "min_final_score",
-                    "max_risk_score",
-                    "max_distance_to_support_pct",
-                    "max_rsi14",
-                    "require_bullish_trend",
-                }
-            }
-            exit_overrides = {
-                key: value
-                for key, value in params.items()
-                if key in {"fixed_horizon_days", "take_profit_pct", "stop_loss_pct"}
-            }
+            entry_overrides = {k: v for k, v in params.items() if k in _ENTRY_KEYS}
+            exit_overrides = {k: v for k, v in params.items() if k in _EXIT_KEYS}
+            scoring_overrides = self._build_scoring_overrides(params)
 
             train_scenario = scenario_with_overrides(
                 base_scenario,
                 name=f"grid_{index}_train",
                 entry_overrides=entry_overrides,
                 exit_overrides=exit_overrides,
+                scoring_overrides=scoring_overrides or None,
             )
             train_scenario.start_date = train_start
             train_scenario.end_date = train_end
@@ -92,6 +102,7 @@ class BacktestOptimizer:
                 name=f"grid_{index}_test",
                 entry_overrides=entry_overrides,
                 exit_overrides=exit_overrides,
+                scoring_overrides=scoring_overrides or None,
             )
             test_scenario.start_date = test_start
             test_scenario.end_date = test_end
@@ -155,6 +166,19 @@ class BacktestOptimizer:
             ]
         )
         return sorted(results, key=lambda result: result.evaluation_score, reverse=True)
+
+    @staticmethod
+    def _build_scoring_overrides(params: dict[str, Any]) -> dict[str, Any]:
+        """Convert flat scoring_* grid keys into a nested scoring config override dict."""
+        result: dict[str, Any] = {}
+        for flat_key, path in _SCORING_GRID_MAP.items():
+            if flat_key not in params:
+                continue
+            node = result
+            for part in path[:-1]:
+                node = node.setdefault(part, {})
+            node[path[-1]] = params[flat_key]
+        return result
 
     @staticmethod
     def _evaluation_score(

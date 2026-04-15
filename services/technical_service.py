@@ -41,11 +41,24 @@ class TechnicalService:
             axis=1,
         ).max(axis=1)
         result["atr14"] = true_range.rolling(window=14, min_periods=14).mean()
+        result["atr14_avg"] = result["atr14"].rolling(window=63, min_periods=20).mean()
 
         rolling_high = close.rolling(window=252, min_periods=20).max()
         rolling_low = close.rolling(window=252, min_periods=20).min()
+        result["week_52_high"] = rolling_high
+        result["week_52_low"] = rolling_low
         result["distance_52w_high_pct"] = ((close / rolling_high) - 1) * 100
         result["distance_52w_low_pct"] = ((close / rolling_low) - 1) * 100
+
+        result["roc10"] = close.pct_change(periods=10) * 100
+        result["roc20"] = close.pct_change(periods=20) * 100
+
+        volume = result["volume"]
+        vol_sma20 = volume.rolling(window=20, min_periods=10).mean()
+        result["vol_sma20"] = vol_sma20
+        result["vol_ratio"] = volume / vol_sma20.replace(0, np.nan)
+        vol_sma5 = volume.rolling(window=5, min_periods=3).mean()
+        result["vol_trend"] = vol_sma5 / vol_sma20.replace(0, np.nan)
 
         return result
 
