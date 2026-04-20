@@ -188,6 +188,254 @@ assets:
     region: US
     enabled: true
     supports_fundamentals: true
+  # --- AI & Semiconductores ---
+  - symbol: AVGO
+    name: Broadcom
+    asset_type: stock
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: AMD
+    name: Advanced Micro Devices
+    asset_type: stock
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: MU
+    name: Micron Technology
+    asset_type: stock
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: AMAT
+    name: Applied Materials
+    asset_type: stock
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: QCOM
+    name: Qualcomm
+    asset_type: stock
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: MRVL
+    name: Marvell Technology
+    asset_type: stock
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: LRCX
+    name: Lam Research
+    asset_type: stock
+    sector: Semiconductors
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- AI Software & Enterprise SaaS ---
+  - symbol: PLTR
+    name: Palantir Technologies
+    asset_type: stock
+    sector: AI Software
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: SNOW
+    name: Snowflake
+    asset_type: stock
+    sector: Cloud Data
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: DDOG
+    name: Datadog
+    asset_type: stock
+    sector: Cloud Software
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: NOW
+    name: ServiceNow
+    asset_type: stock
+    sector: Enterprise SaaS
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: CRM
+    name: Salesforce
+    asset_type: stock
+    sector: Enterprise SaaS
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: WDAY
+    name: Workday
+    asset_type: stock
+    sector: Enterprise SaaS
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Ciberseguridad ---
+  - symbol: CRWD
+    name: CrowdStrike
+    asset_type: stock
+    sector: Cybersecurity
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: PANW
+    name: Palo Alto Networks
+    asset_type: stock
+    sector: Cybersecurity
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: FTNT
+    name: Fortinet
+    asset_type: stock
+    sector: Cybersecurity
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: NET
+    name: Cloudflare
+    asset_type: stock
+    sector: Cybersecurity
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Cloud Infrastructure ---
+  - symbol: DOCN
+    name: DigitalOcean
+    asset_type: stock
+    sector: Cloud Infrastructure
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Defensa & Aeroespacial ---
+  - symbol: RTX
+    name: RTX Corporation
+    asset_type: stock
+    sector: Defense
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: LMT
+    name: Lockheed Martin
+    asset_type: stock
+    sector: Defense
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: GD
+    name: General Dynamics
+    asset_type: stock
+    sector: Defense
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: NOC
+    name: Northrop Grumman
+    asset_type: stock
+    sector: Defense
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Biotech & Salud ---
+  - symbol: VRTX
+    name: Vertex Pharmaceuticals
+    asset_type: stock
+    sector: Biotech
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: CRSP
+    name: CRISPR Therapeutics
+    asset_type: stock
+    sector: Biotech
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: VEEV
+    name: Veeva Systems
+    asset_type: stock
+    sector: Healthcare SaaS
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: ISRG
+    name: Intuitive Surgical
+    asset_type: stock
+    sector: Medical Devices
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Fintech & Pagos ---
+  - symbol: HOOD
+    name: Robinhood Markets
+    asset_type: stock
+    sector: Fintech
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: SQ
+    name: Block
+    asset_type: stock
+    sector: Fintech
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: PYPL
+    name: PayPal
+    asset_type: stock
+    sector: Fintech
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Vehículos Autónomos & Movilidad ---
+  - symbol: MBLY
+    name: Mobileye Global
+    asset_type: stock
+    sector: Technology
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: UBER
+    name: Uber Technologies
+    asset_type: stock
+    sector: Technology
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Otros sectores de interés ---
+  - symbol: TSLA
+    name: Tesla
+    asset_type: stock
+    sector: Electric Vehicles
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: SPGI
+    name: S&P Global
+    asset_type: stock
+    sector: Financial Data
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  - symbol: META
+    name: Meta Platforms
+    asset_type: stock
+    sector: Technology
+    region: US
+    enabled: true
+    supports_fundamentals: true
+  # --- Crypto ---
   - symbol: BTCUSDT
     name: Bitcoin
     asset_type: crypto
