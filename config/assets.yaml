@@ -384,13 +384,7 @@ assets:
     region: US
     enabled: true
     supports_fundamentals: true
-  - symbol: SQ
-    name: Block
-    asset_type: stock
-    sector: Fintech
-    region: US
-    enabled: true
-    supports_fundamentals: true
+
   - symbol: PYPL
     name: PayPal
     asset_type: stock
