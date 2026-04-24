@@ -16,6 +16,8 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -79,6 +81,9 @@ class PriceBarDailyORM(Base):
     low: Mapped[float] = mapped_column(Float)
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[float] = mapped_column(Float)
+    provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    is_adjusted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    inserted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     asset: Mapped[AssetORM] = relationship(back_populates="prices")
 
@@ -155,6 +160,36 @@ class SignalORM(Base):
     asset: Mapped[AssetORM] = relationship(back_populates="signals")
 
 
+class HistoricalScoreSnapshotORM(Base):
+    __tablename__ = "historical_score_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "asset_id",
+            "date",
+            "source_version",
+            "portfolio_context",
+            name="uq_historical_score_asset_date_version_context",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    technical_score: Mapped[float] = mapped_column(Float)
+    risk_score: Mapped[float] = mapped_column(Float)
+    portfolio_fit_score: Mapped[float] = mapped_column(Float)
+    final_score: Mapped[float] = mapped_column(Float)
+    recommendation: Mapped[str] = mapped_column(String(20))
+    support_low: Mapped[float | None] = mapped_column(Float, nullable=True)
+    support_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_to_support_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    technical_payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    signal_payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    source_version: Mapped[str] = mapped_column(String(80), index=True)
+    portfolio_context: Mapped[str] = mapped_column(String(30), default="neutral")
+
+
 class AppConfigORM(Base):
     __tablename__ = "app_config"
 
@@ -172,6 +207,11 @@ class AssetDataStatusORM(Base):
     last_successful_refresh_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_refresh_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     last_refresh_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    primary_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    historical_provider_baseline: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    historical_coverage_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    historical_coverage_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    recent_provider_mix: Mapped[bool] = mapped_column(Boolean, default=False)
     data_mode: Mapped[str] = mapped_column(String(20), default="unknown")
     freshness_status: Mapped[str] = mapped_column(String(20), default="missing")
     last_error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -437,12 +477,71 @@ def session_scope() -> Iterator[Session]:
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    ensure_schema_migrations()
+
+
+def ensure_schema_migrations() -> None:
+    if engine.dialect.name != "sqlite":
+        return
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        table_names = set(inspector.get_table_names())
+
+        if "price_bars_daily" in table_names:
+            price_columns = {
+                column["name"] for column in inspector.get_columns("price_bars_daily")
+            }
+            if "provider" not in price_columns:
+                connection.execute(
+                    text("ALTER TABLE price_bars_daily ADD COLUMN provider VARCHAR(40)")
+                )
+            if "is_adjusted" not in price_columns:
+                connection.execute(
+                    text("ALTER TABLE price_bars_daily ADD COLUMN is_adjusted BOOLEAN")
+                )
+            if "inserted_at" not in price_columns:
+                connection.execute(
+                    text("ALTER TABLE price_bars_daily ADD COLUMN inserted_at DATETIME")
+                )
+
+        if "asset_data_status" in table_names:
+            status_columns = {
+                column["name"] for column in inspector.get_columns("asset_data_status")
+            }
+            if "primary_provider" not in status_columns:
+                connection.execute(
+                    text("ALTER TABLE asset_data_status ADD COLUMN primary_provider VARCHAR(40)")
+                )
+            if "historical_provider_baseline" not in status_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE asset_data_status "
+                        "ADD COLUMN historical_provider_baseline VARCHAR(40)"
+                    )
+                )
+            if "historical_coverage_start" not in status_columns:
+                connection.execute(
+                    text("ALTER TABLE asset_data_status ADD COLUMN historical_coverage_start DATE")
+                )
+            if "historical_coverage_end" not in status_columns:
+                connection.execute(
+                    text("ALTER TABLE asset_data_status ADD COLUMN historical_coverage_end DATE")
+                )
+            if "recent_provider_mix" not in status_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE asset_data_status "
+                        "ADD COLUMN recent_provider_mix BOOLEAN DEFAULT 0"
+                    )
+                )
 
 
 def seed_assets() -> None:
     from data.repositories.assets_repo import AssetsRepository
 
     assets_config = load_assets_config()
+    yaml_symbols = {asset.symbol for asset in assets_config.assets}
     with session_scope() as session:
         repo = AssetsRepository(session)
         for asset in assets_config.assets:
@@ -455,6 +554,11 @@ def seed_assets() -> None:
                 enabled=asset.enabled,
                 supports_fundamentals=asset.supports_fundamentals,
             )
+        # Deshabilitar activos en DB que ya no están en el YAML
+        for db_asset in repo.list_all():
+            if db_asset.symbol not in yaml_symbols and db_asset.enabled:
+                db_asset.enabled = False
+                session.flush()
 
 
 def main() -> None:
@@ -471,3 +575,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+Base.metadata.create_all(bind=engine)
+ensure_schema_migrations()
