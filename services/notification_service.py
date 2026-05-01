@@ -94,8 +94,9 @@ class NotificationService:
 
     def build_telegram_message(self, alert: AlertORM) -> str:
         payload = alert.payload_json or {}
+        asset_label = f"{alert.symbol} — {payload['name']}" if payload.get("name") else alert.symbol
         lines = [
-            f"[{alert.severity.upper()}] {alert.symbol} · {alert.alert_type}",
+            f"[{alert.severity.upper()}] {asset_label} · {alert.alert_type}",
             alert.title,
             alert.message,
         ]
