@@ -1,0 +1,4 @@
+study,config_id,label,train_total_trades,test_total_trades,train_expectancy_pct,test_expectancy_pct,train_profit_factor,test_profit_factor,train_max_drawdown_pct,test_max_drawdown_pct
+stocks_old_window,cfg_09,Hybrid 10/5/20,36,13,-0.48,0.48,0.79,1.26,1.82,0.43
+etfs_old_window,cfg_01,Balanced fixed 10d,54,23,0.18,-0.46,1.21,0.64,1.51,1.06
+crypto_old_window,cfg_07,Signal loss 40,3,0,5.57,0.0,3.54,0.0,0.15,0.0

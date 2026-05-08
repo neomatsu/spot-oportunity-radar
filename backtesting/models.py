@@ -147,6 +147,7 @@ class BacktestScenario:
     evaluation_rules: EvaluationRules
     portfolio_simulation_rules: PortfolioSimulationRules
     rsi_cycle_rules: RSICycleRules = field(default_factory=default_rsi_cycle_rules)
+    scoring_overrides: dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -209,6 +210,7 @@ class BacktestScenario:
                 ),
                 "sell_priority": list(self.portfolio_simulation_rules.sell_priority),
             },
+            "scoring_overrides": self.scoring_overrides,
             "rsi_cycle_rules": {
                 "oversold_threshold": self.rsi_cycle_rules.oversold_threshold,
                 "deep_oversold_threshold_1": self.rsi_cycle_rules.deep_oversold_threshold_1,

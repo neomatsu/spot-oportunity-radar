@@ -1,0 +1,5 @@
+universe,candidate_config_id,candidate_label,train_total_trades,test_total_trades,train_expectancy_pct,test_expectancy_pct,train_profit_factor,test_profit_factor,train_max_drawdown_pct,test_max_drawdown_pct,weighted_universe_score,universe_score,universe_weight,variant_id,variant_label
+mixed_reference,cfg_12,Balanced hybrid 12/7/15,55,21,0.01,0.16,1.0,1.17,2.8,0.51,1.03,2.94,0.35,active_config,Active scoring.yaml
+stocks_reference,cfg_09,Hybrid 10/5/20,33,12,-0.48,0.73,0.8,1.39,1.41,0.42,2.6,8.67,0.3,active_config,Active scoring.yaml
+etfs_reference,cfg_01,Balanced fixed 10d,54,23,0.18,-0.46,1.21,0.64,1.5,1.04,-2.43,-9.72,0.25,active_config,Active scoring.yaml
+crypto_reference,cfg_07,Signal loss 40,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-2.6,-26.0,0.1,active_config,Active scoring.yaml

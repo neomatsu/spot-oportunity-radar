@@ -1,0 +1,185 @@
+reference_universes:
+  mixed_reference:
+    symbols:
+      - AMZN
+      - ASML
+      - GOOGL
+      - MSFT
+      - NVDA
+      - TSM
+      - IB28
+      - QQQ
+      - SPY
+      - BTCUSDT
+      - ETHUSDT
+      - SOLUSDT
+    start_date: 2024-08-19
+    end_date: 2026-03-27
+    candidate_config_id: cfg_12
+    weight: 0.35
+    min_test_trades: 5
+  stocks_reference:
+    symbols:
+      - AMZN
+      - ASML
+      - GOOGL
+      - MSFT
+      - NVDA
+      - TSM
+    start_date: 2024-08-19
+    end_date: 2026-03-27
+    candidate_config_id: cfg_09
+    weight: 0.30
+    min_test_trades: 5
+  etfs_reference:
+    symbols:
+      - IB28
+      - QQQ
+      - SPY
+    start_date: 2024-08-19
+    end_date: 2026-03-27
+    candidate_config_id: cfg_01
+    weight: 0.25
+    min_test_trades: 5
+  crypto_reference:
+    symbols:
+      - BTCUSDT
+      - ETHUSDT
+      - SOLUSDT
+    start_date: 2023-07-02
+    end_date: 2026-03-27
+    candidate_config_id: cfg_07
+    weight: 0.10
+    min_test_trades: 3
+
+iterations:
+  - id: trend
+    label: Trend slow adjustments
+    variants:
+      - id: trend_control
+        label: Control
+        scoring_overrides: {}
+      - id: trend_soft
+        label: Softer trend penalties
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 12
+              death_cross_penalty: -8
+              price_above_sma200: 8
+              price_below_sma200: -4
+              ema20_above_sma50: 10
+              ema20_below_sma50: -3
+      - id: trend_balanced
+        label: Balanced trend
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 14
+              death_cross_penalty: -8
+              price_above_sma200: 7
+              price_below_sma200: -4
+              ema20_above_sma50: 8
+              ema20_below_sma50: -2
+      - id: trend_fast_recovery
+        label: Fast recovery bias
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 12
+              death_cross_penalty: -6
+              price_above_sma200: 6
+              price_below_sma200: -4
+              ema20_above_sma50: 12
+              ema20_below_sma50: -2
+
+  - id: shock
+    label: Shock regime tuning
+    variants:
+      - id: shock_control
+        label: Control
+        scoring_overrides: {}
+      - id: shock_balanced
+        label: Balanced shock
+        scoring_overrides:
+          technical:
+            rsi_contextual:
+              oversold_shock: 22
+              neutral_shock: 13
+            market_regime:
+              shock_rsi_threshold: 34
+              shock_ema_below_sma50_pct: 0.035
+              shock_atr_multiplier: 1.6
+      - id: shock_strict
+        label: Strict shock
+        scoring_overrides:
+          technical:
+            rsi_contextual:
+              oversold_shock: 20
+              neutral_shock: 12
+            market_regime:
+              shock_rsi_threshold: 32
+              shock_ema_below_sma50_pct: 0.04
+              shock_atr_multiplier: 1.8
+      - id: shock_aggressive
+        label: Aggressive shock
+        scoring_overrides:
+          technical:
+            rsi_contextual:
+              oversold_shock: 26
+              neutral_shock: 15
+            market_regime:
+              shock_rsi_threshold: 35
+              shock_ema_below_sma50_pct: 0.03
+              shock_atr_multiplier: 1.45
+
+  - id: support
+    label: Support ATR tuning
+    variants:
+      - id: support_control
+        label: Control
+        scoring_overrides: {}
+      - id: support_strict
+        label: Strict overshoot handling
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.2
+              atr_proximity_bonus_multiplier: 1.05
+      - id: support_balanced
+        label: Balanced overshoot handling
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.3
+              atr_proximity_bonus_multiplier: 1.08
+      - id: support_lenient
+        label: Lenient overshoot handling
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.45
+              atr_proximity_bonus_multiplier: 1.12
+
+  - id: recommendation
+    label: Recommendation gating
+    variants:
+      - id: recommendation_control
+        label: Control
+        scoring_overrides: {}
+      - id: recommendation_eased_buy
+        label: Lower buy threshold
+        scoring_overrides:
+          recommendation_thresholds:
+            buy_candidate_min: 69
+      - id: recommendation_eased_risk
+        label: Higher risk tolerance
+        scoring_overrides:
+          recommendation_thresholds:
+            max_buy_candidate_risk_score: 72
+      - id: recommendation_balanced
+        label: Lower buy and mild risk easing
+        scoring_overrides:
+          recommendation_thresholds:
+            buy_candidate_min: 70
+            max_buy_candidate_risk_score: 71

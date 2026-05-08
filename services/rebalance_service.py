@@ -82,11 +82,37 @@ class RebalanceService:
         else:
             breakdown["cash_buffer"] = 0.0
 
+        total_positions = sum(1 for weight in exposure.by_asset.values() if weight > 0)
+        cold_start_penalty = self._cold_start_penalty(
+            asset_type=asset.asset_type,
+            total_positions=total_positions,
+        )
+        if cold_start_penalty > 0:
+            score -= cold_start_penalty
+            breakdown["cold_start_adjustment"] = -float(cold_start_penalty)
+            reasons.append("Ajuste prudente de cold start para cartera aun muy vacia")
+        else:
+            breakdown["cold_start_adjustment"] = 0.0
+
         final_score = max(0.0, min(100.0, score))
         rationale = {
             "breakdown": {key: round(value, 2) for key, value in breakdown.items()},
             "reasons": reasons,
             "portfolio_fit_score": round(final_score, 2),
             "cash_weight": round(cash_weight, 4),
+            "portfolio_fit_adjustment": {
+                "cold_start_penalty": round(float(cold_start_penalty), 2),
+                "total_positions": total_positions,
+            },
         }
         return final_score, rationale
+
+    def _cold_start_penalty(self, *, asset_type: str, total_positions: int) -> float:
+        cfg = self.rules.get("portfolio_fit", {})
+        threshold = int(cfg.get("cold_start_position_threshold", 3))
+        if total_positions > threshold:
+            return 0.0
+
+        penalties = cfg.get("cold_start_penalties", {})
+        penalty = penalties.get(asset_type, penalties.get(asset_type.upper(), 0.0))
+        return float(penalty or 0.0)

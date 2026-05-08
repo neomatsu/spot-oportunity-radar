@@ -49,3 +49,26 @@ def test_portfolio_fit_rewards_underweight_bucket() -> None:
 
     assert score > 60
     assert "Clase de activo infraponderada" in rationale["reasons"]
+
+
+def test_portfolio_fit_cold_start_penalizes_crypto() -> None:
+    asset = AssetORM(
+        symbol="BTCUSDT",
+        name="Bitcoin",
+        asset_type="crypto",
+        sector="Crypto",
+        region="Global",
+        enabled=True,
+        supports_fundamentals=False,
+    )
+    exposure = PortfolioExposureModel(
+        total_invested_weight=0.0,
+        by_asset={},
+        by_sector={},
+        by_asset_type={},
+    )
+
+    score, rationale = RebalanceService().portfolio_fit_score(asset, exposure)
+
+    assert rationale["portfolio_fit_adjustment"]["cold_start_penalty"] == 15.0
+    assert rationale["breakdown"]["cold_start_adjustment"] == -15.0

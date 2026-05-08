@@ -140,3 +140,77 @@ def test_optimizer_runs_multiple_combinations_and_sorts(db_session, monkeypatch)
     assert len(results) == 2
     assert results[0].evaluation_score >= results[1].evaluation_score
     assert results[0].parameters["min_final_score"] == 70
+
+
+def test_optimizer_passes_scoring_overrides_to_scenario(db_session, monkeypatch) -> None:
+    optimizer = BacktestOptimizer(db_session)
+    optimizer.config = {
+        "grid": {
+            "min_final_score": [60],
+            "max_risk_score": [65],
+            "max_distance_to_support_pct": [6],
+            "max_rsi14": [65],
+            "fixed_horizon_days": [20],
+            "take_profit_pct": [0.10],
+            "stop_loss_pct": [0.05],
+            "require_bullish_trend": [False],
+            "scoring_support_decay": [0.20],
+            "scoring_rsi_oversold_threshold": [30],
+        },
+        "evaluation_score": {
+            "expectancy_weight": 0.3,
+            "profit_factor_weight": 0.25,
+            "avg_return_weight": 0.2,
+            "drawdown_penalty_weight": 0.15,
+            "robustness_weight": 0.1,
+            "low_trade_threshold": 10,
+            "low_trade_penalty": 10,
+        },
+    }
+
+    captured: list[dict] = []
+
+    def fake_run(scenario, persist=False):
+        captured.append(dict(scenario.scoring_overrides))
+        return BacktestRunResult(
+            run_id=None,
+            parameter_set_id=None,
+            scenario=scenario,
+            trades=[],
+            metrics=_metrics(expectancy=1.0, profit_factor=1.2),
+            segmented_metrics={},
+            equity_curve=[],
+            warnings=[],
+        )
+
+    monkeypatch.setattr(optimizer.engine, "run", fake_run)
+    optimizer.run_grid_search(_scenario())
+
+    assert len(captured) == 2  # train + test
+    expected = {
+        "technical": {
+            "support_distance": {"decay": 0.20},
+            "rsi_contextual": {"oversold_threshold": 30},
+        }
+    }
+    assert captured[0] == expected
+    assert captured[1] == expected
+
+
+def test_build_scoring_overrides_empty_when_no_scoring_params() -> None:
+    result = BacktestOptimizer._build_scoring_overrides({"min_final_score": 60})
+    assert result == {}
+
+
+def test_build_scoring_overrides_nested_structure() -> None:
+    result = BacktestOptimizer._build_scoring_overrides({
+        "scoring_support_decay": 0.50,
+        "scoring_trend_golden_cross_bonus": 8,
+        "min_final_score": 60,  # debe ignorarse
+    })
+    assert result == {
+        "technical": {
+            "support_distance": {"decay": 0.50},
+            "trend": {"golden_cross_bonus": 8},
+        }
+    }

@@ -1,0 +1,124 @@
+reference_universes:
+  etfs_equity_broad:
+    symbols:
+      - SPY
+      - QQQ
+      - SXR8.DE
+      - VWCE.DE
+      - VWRL.LON
+      - EXSA.DE
+      - EIMI.LON
+      - SOXX
+      - IWM
+      - IJH
+    start_date: 2024-08-19
+    end_date: 2026-03-27
+    candidate_config_id: cfg_02
+    weight: 0.70
+    min_test_trades: 12
+  etfs_defensive_bonds:
+    symbols:
+      - IB28
+      - TLT
+      - SHY
+      - BIL
+      - FLOT
+      - JPST
+      - 10AM.DE
+    start_date: 2024-08-19
+    end_date: 2026-03-27
+    candidate_config_id: cfg_01
+    weight: 0.30
+    min_test_trades: 8
+
+iterations:
+  - id: etf_trend
+    label: ETF trend tuning
+    variants:
+      - id: etf_trend_control
+        label: Control
+        scoring_overrides: {}
+      - id: etf_trend_defensive
+        label: More defensive slow trend
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 12
+              death_cross_penalty: -8
+              price_above_sma200: 7
+              price_below_sma200: -5
+              ema20_above_sma50: 10
+              ema20_below_sma50: -3
+      - id: etf_trend_fast
+        label: Faster ETF recovery
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 10
+              death_cross_penalty: -5
+              price_above_sma200: 6
+              price_below_sma200: -3
+              ema20_above_sma50: 14
+              ema20_below_sma50: -1
+      - id: etf_trend_balanced
+        label: Balanced ETF trend
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 11
+              death_cross_penalty: -6
+              price_above_sma200: 6
+              price_below_sma200: -4
+              ema20_above_sma50: 13
+              ema20_below_sma50: -2
+
+  - id: etf_support
+    label: ETF support tuning
+    variants:
+      - id: etf_support_control
+        label: Control
+        scoring_overrides: {}
+      - id: etf_support_strict
+        label: Tight support discipline
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.30
+              atr_proximity_bonus_multiplier: 1.05
+      - id: etf_support_balanced
+        label: Balanced support handling
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.40
+              atr_proximity_bonus_multiplier: 1.10
+      - id: etf_support_lenient
+        label: Lenient ETF support handling
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.50
+              atr_proximity_bonus_multiplier: 1.15
+
+  - id: etf_recommendation
+    label: ETF recommendation gating
+    variants:
+      - id: etf_recommendation_control
+        label: Control
+        scoring_overrides: {}
+      - id: etf_recommendation_buy_70
+        label: Buy threshold 70
+        scoring_overrides:
+          recommendation_thresholds:
+            buy_candidate_min: 70
+      - id: etf_recommendation_buy_69
+        label: Buy threshold 69
+        scoring_overrides:
+          recommendation_thresholds:
+            buy_candidate_min: 69
+      - id: etf_recommendation_balanced
+        label: Buy 70 and risk 70
+        scoring_overrides:
+          recommendation_thresholds:
+            buy_candidate_min: 70
+            max_buy_candidate_risk_score: 70

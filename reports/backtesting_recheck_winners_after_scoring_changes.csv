@@ -1,0 +1,5 @@
+universe,config_id,label,train_total_trades,test_total_trades,train_expectancy_pct,test_expectancy_pct,train_profit_factor,test_profit_factor,train_max_drawdown_pct,test_max_drawdown_pct
+mixed,cfg_12,Balanced hybrid 12/7/15,299,133,0.25,0.4,1.21,1.46,5.18,2.67
+stocks,cfg_09,Hybrid 10/5/20,71,41,0.58,0.55,1.27,1.25,2.39,2.31
+etfs,cfg_01,Balanced fixed 10d,482,232,0.26,81.02,1.26,123.43,6.62,3.07
+crypto,cfg_07,Signal loss 40,3,0,5.57,0.0,3.54,0.0,0.15,0.0

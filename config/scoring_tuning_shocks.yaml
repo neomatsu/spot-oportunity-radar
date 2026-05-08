@@ -1,0 +1,124 @@
+reference_universes:
+  spy_shock_reference:
+    symbols:
+      - SPY
+    start_date: 2025-01-15
+    end_date: 2025-07-31
+    candidate_config_id: cfg_02
+    weight: 0.25
+    min_test_trades: 2
+  qqq_shock_reference:
+    symbols:
+      - QQQ
+    start_date: 2025-01-15
+    end_date: 2025-07-31
+    candidate_config_id: cfg_02
+    weight: 0.25
+    min_test_trades: 2
+  sxr8_shock_reference:
+    symbols:
+      - SXR8.DE
+    start_date: 2025-01-15
+    end_date: 2025-07-31
+    candidate_config_id: cfg_02
+    weight: 0.25
+    min_test_trades: 2
+  soxx_shock_reference:
+    symbols:
+      - SOXX
+    start_date: 2025-01-15
+    end_date: 2025-07-31
+    candidate_config_id: cfg_02
+    weight: 0.25
+    min_test_trades: 2
+
+iterations:
+  - id: shock_regime
+    label: Shock regime tuning
+    variants:
+      - id: shock_regime_control
+        label: Control
+        scoring_overrides: {}
+      - id: shock_regime_balanced
+        label: Balanced shock
+        scoring_overrides:
+          technical:
+            rsi_contextual:
+              oversold_shock: 26
+              neutral_shock: 15
+            market_regime:
+              shock_rsi_threshold: 34
+              shock_ema_below_sma50_pct: 0.03
+              shock_atr_multiplier: 1.35
+      - id: shock_regime_early
+        label: Early shock recognition
+        scoring_overrides:
+          technical:
+            rsi_contextual:
+              oversold_shock: 28
+              neutral_shock: 16
+            market_regime:
+              shock_rsi_threshold: 36
+              shock_ema_below_sma50_pct: 0.025
+              shock_atr_multiplier: 1.25
+      - id: shock_regime_strict
+        label: Strict shock
+        scoring_overrides:
+          technical:
+            rsi_contextual:
+              oversold_shock: 22
+              neutral_shock: 13
+            market_regime:
+              shock_rsi_threshold: 32
+              shock_ema_below_sma50_pct: 0.04
+              shock_atr_multiplier: 1.6
+
+  - id: shock_trend
+    label: Shock trend tuning
+    variants:
+      - id: shock_trend_control
+        label: Control
+        scoring_overrides: {}
+      - id: shock_trend_relaxed
+        label: Relaxed slow trend in shocks
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 11
+              death_cross_penalty: -4
+              price_above_sma200: 6
+              price_below_sma200: -3
+              ema20_above_sma50: 14
+              ema20_below_sma50: -1
+      - id: shock_trend_balanced
+        label: Balanced shock trend
+        scoring_overrides:
+          technical:
+            trend:
+              golden_cross_bonus: 12
+              death_cross_penalty: -5
+              price_above_sma200: 6
+              price_below_sma200: -4
+              ema20_above_sma50: 13
+              ema20_below_sma50: -1
+
+  - id: shock_support
+    label: Shock support handling
+    variants:
+      - id: shock_support_control
+        label: Control
+        scoring_overrides: {}
+      - id: shock_support_atr
+        label: ATR-aware overshoot
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.55
+              atr_proximity_bonus_multiplier: 1.18
+      - id: shock_support_balanced
+        label: Balanced ATR overshoot
+        scoring_overrides:
+          technical:
+            support_distance:
+              overshoot_near_support_score_ratio: 0.50
+              atr_proximity_bonus_multiplier: 1.15

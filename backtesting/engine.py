@@ -55,6 +55,11 @@ class BacktestEngine:
         persist: bool = True,
         run_name: str | None = None,
     ) -> BacktestRunResult:
+        self.scoring_service = (
+            ScoringService(overrides=scenario.scoring_overrides)
+            if scenario.scoring_overrides
+            else ScoringService()
+        )
         assets = self._load_assets(scenario.assets)
         frames = {
             asset.id: self._load_asset_frame(asset, scenario.start_date, scenario.end_date)

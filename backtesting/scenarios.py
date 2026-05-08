@@ -162,6 +162,7 @@ def scenario_with_overrides(
     execution_overrides: dict[str, Any] | None = None,
     portfolio_simulation_overrides: dict[str, Any] | None = None,
     rsi_cycle_overrides: dict[str, Any] | None = None,
+    scoring_overrides: dict[str, Any] | None = None,
 ) -> BacktestScenario:
     entry = {
         "min_final_score": base.entry_rules.min_final_score,
@@ -298,6 +299,7 @@ def scenario_with_overrides(
             sell_reduction_by_alert_type=dict(portfolio_sim["sell_reduction_by_alert_type"]),
             sell_priority=tuple(portfolio_sim["sell_priority"]),
         ),
+        scoring_overrides=scoring_overrides if scoring_overrides is not None else base.scoring_overrides,
         rsi_cycle_rules=RSICycleRules(
             oversold_threshold=float(rsi_cycle["oversold_threshold"]),
             deep_oversold_threshold_1=float(rsi_cycle["deep_oversold_threshold_1"]),

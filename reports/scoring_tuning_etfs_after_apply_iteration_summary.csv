@@ -1,0 +1,13 @@
+iteration_id,iteration_label,variant_id,variant_label,aggregate_score,scoring_overrides
+etf_trend,ETF trend tuning,etf_trend_control,Control,11.14,{}
+etf_trend,ETF trend tuning,etf_trend_fast,Faster ETF recovery,10.79,"{'technical': {'trend': {'golden_cross_bonus': 10, 'death_cross_penalty': -5, 'price_above_sma200': 6, 'price_below_sma200': -3, 'ema20_above_sma50': 14, 'ema20_below_sma50': -1}}}"
+etf_trend,ETF trend tuning,etf_trend_balanced,Balanced ETF trend,10.48,"{'technical': {'trend': {'golden_cross_bonus': 11, 'death_cross_penalty': -6, 'price_above_sma200': 6, 'price_below_sma200': -4, 'ema20_above_sma50': 13, 'ema20_below_sma50': -2}}}"
+etf_trend,ETF trend tuning,etf_trend_defensive,More defensive slow trend,6.68,"{'technical': {'trend': {'golden_cross_bonus': 12, 'death_cross_penalty': -8, 'price_above_sma200': 7, 'price_below_sma200': -5, 'ema20_above_sma50': 10, 'ema20_below_sma50': -3}}}"
+etf_support,ETF support tuning,etf_support_control,Control,11.14,{}
+etf_support,ETF support tuning,etf_support_balanced,Balanced support handling,11.14,"{'technical': {'support_distance': {'overshoot_near_support_score_ratio': 0.4, 'atr_proximity_bonus_multiplier': 1.1}}}"
+etf_support,ETF support tuning,etf_support_lenient,Lenient ETF support handling,9.91,"{'technical': {'support_distance': {'overshoot_near_support_score_ratio': 0.5, 'atr_proximity_bonus_multiplier': 1.15}}}"
+etf_support,ETF support tuning,etf_support_strict,Tight support discipline,9.08,"{'technical': {'support_distance': {'overshoot_near_support_score_ratio': 0.3, 'atr_proximity_bonus_multiplier': 1.05}}}"
+etf_recommendation,ETF recommendation gating,etf_recommendation_control,Control,11.14,{}
+etf_recommendation,ETF recommendation gating,etf_recommendation_buy_70,Buy threshold 70,11.14,{'recommendation_thresholds': {'buy_candidate_min': 70}}
+etf_recommendation,ETF recommendation gating,etf_recommendation_buy_69,Buy threshold 69,11.14,{'recommendation_thresholds': {'buy_candidate_min': 69}}
+etf_recommendation,ETF recommendation gating,etf_recommendation_balanced,Buy 70 and risk 70,11.14,"{'recommendation_thresholds': {'buy_candidate_min': 70, 'max_buy_candidate_risk_score': 70}}"

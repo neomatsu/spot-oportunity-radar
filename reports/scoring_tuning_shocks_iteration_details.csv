@@ -1,0 +1,41 @@
+universe,candidate_config_id,candidate_label,train_total_trades,test_total_trades,train_expectancy_pct,test_expectancy_pct,train_profit_factor,test_profit_factor,train_max_drawdown_pct,test_max_drawdown_pct,weighted_universe_score,universe_score,universe_weight,iteration_id,iteration_label,variant_id,variant_label
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.55,0.0,-7.91,-31.65,0.25,shock_regime,Shock regime tuning,shock_regime_control,Control
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_regime,Shock regime tuning,shock_regime_control,Control
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_regime,Shock regime tuning,shock_regime_control,Control
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_regime,Shock regime tuning,shock_regime_control,Control
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.55,0.0,-7.91,-31.65,0.25,shock_regime,Shock regime tuning,shock_regime_balanced,Balanced shock
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_regime,Shock regime tuning,shock_regime_balanced,Balanced shock
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_regime,Shock regime tuning,shock_regime_balanced,Balanced shock
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_regime,Shock regime tuning,shock_regime_balanced,Balanced shock
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.55,0.0,-7.91,-31.65,0.25,shock_regime,Shock regime tuning,shock_regime_early,Early shock recognition
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_regime,Shock regime tuning,shock_regime_early,Early shock recognition
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_regime,Shock regime tuning,shock_regime_early,Early shock recognition
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_regime,Shock regime tuning,shock_regime_early,Early shock recognition
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.55,0.0,-7.91,-31.65,0.25,shock_regime,Shock regime tuning,shock_regime_strict,Strict shock
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_regime,Shock regime tuning,shock_regime_strict,Strict shock
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_regime,Shock regime tuning,shock_regime_strict,Strict shock
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_regime,Shock regime tuning,shock_regime_strict,Strict shock
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.55,0.0,-7.91,-31.65,0.25,shock_trend,Shock trend tuning,shock_trend_control,Control
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_trend,Shock trend tuning,shock_trend_control,Control
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_trend,Shock trend tuning,shock_trend_control,Control
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_trend,Shock trend tuning,shock_trend_control,Control
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.55,0.0,-7.91,-31.65,0.25,shock_trend,Shock trend tuning,shock_trend_relaxed,Relaxed slow trend in shocks
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_trend,Shock trend tuning,shock_trend_relaxed,Relaxed slow trend in shocks
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_trend,Shock trend tuning,shock_trend_relaxed,Relaxed slow trend in shocks
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_trend,Shock trend tuning,shock_trend_relaxed,Relaxed slow trend in shocks
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.56,0.0,-7.91,-31.65,0.25,shock_trend,Shock trend tuning,shock_trend_balanced,Balanced shock trend
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_trend,Shock trend tuning,shock_trend_balanced,Balanced shock trend
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_trend,Shock trend tuning,shock_trend_balanced,Balanced shock trend
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_trend,Shock trend tuning,shock_trend_balanced,Balanced shock trend
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.55,0.0,-7.91,-31.65,0.25,shock_support,Shock support handling,shock_support_control,Control
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_support,Shock support handling,shock_support_control,Control
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_support,Shock support handling,shock_support_control,Control
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_support,Shock support handling,shock_support_control,Control
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.56,0.0,-7.91,-31.65,0.25,shock_support,Shock support handling,shock_support_atr,ATR-aware overshoot
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_support,Shock support handling,shock_support_atr,ATR-aware overshoot
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_support,Shock support handling,shock_support_atr,ATR-aware overshoot
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_support,Shock support handling,shock_support_atr,ATR-aware overshoot
+spy_shock_reference,cfg_02,Balanced fixed 20d,3,0,-2.65,0.0,0.21,0.0,0.56,0.0,-7.91,-31.65,0.25,shock_support,Shock support handling,shock_support_balanced,Balanced ATR overshoot
+qqq_shock_reference,cfg_02,Balanced fixed 20d,3,0,-0.4,0.0,0.84,0.0,0.43,0.0,-5.46,-21.84,0.25,shock_support,Shock support handling,shock_support_balanced,Balanced ATR overshoot
+sxr8_shock_reference,cfg_02,Balanced fixed 20d,3,0,-4.65,0.0,0.0,0.0,0.65,0.0,-9.92,-39.67,0.25,shock_support,Shock support handling,shock_support_balanced,Balanced ATR overshoot
+soxx_shock_reference,cfg_02,Balanced fixed 20d,0,0,0.0,0.0,0.0,0.0,0.0,0.0,-5.5,-22.0,0.25,shock_support,Shock support handling,shock_support_balanced,Balanced ATR overshoot

@@ -54,6 +54,17 @@ def load_yaml_config(name: str) -> dict[str, Any]:
         return yaml.safe_load(file) or {}
 
 
+def deep_merge_configs(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge override into base recursively. Override values take precedence."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge_configs(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 def load_assets_config() -> AppAssetList:
     return AppAssetList.model_validate(load_yaml_config("assets.yaml"))
 

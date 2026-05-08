@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import delete, func, select
@@ -13,7 +13,14 @@ class PricesRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def upsert_asset_prices(self, asset_id: int, frame: pd.DataFrame) -> int:
+    def upsert_asset_prices(
+        self,
+        asset_id: int,
+        frame: pd.DataFrame,
+        *,
+        provider_name: str | None = None,
+        is_adjusted: bool | None = None,
+    ) -> int:
         if frame.empty:
             return 0
 
@@ -41,6 +48,9 @@ class PricesRepository:
                         low=float(row.low),
                         close=float(row.close),
                         volume=float(row.volume),
+                        provider=provider_name,
+                        is_adjusted=is_adjusted,
+                        inserted_at=datetime.now(UTC).replace(tzinfo=None),
                     )
                 )
                 inserted += 1
@@ -51,11 +61,21 @@ class PricesRepository:
             existing.low = float(row.low)
             existing.close = float(row.close)
             existing.volume = float(row.volume)
+            existing.provider = provider_name or existing.provider
+            existing.is_adjusted = is_adjusted if is_adjusted is not None else existing.is_adjusted
+            existing.inserted_at = datetime.now(UTC).replace(tzinfo=None)
 
         self.session.flush()
         return inserted
 
-    def replace_asset_prices(self, asset_id: int, frame: pd.DataFrame) -> None:
+    def replace_asset_prices(
+        self,
+        asset_id: int,
+        frame: pd.DataFrame,
+        *,
+        provider_name: str | None = None,
+        is_adjusted: bool | None = None,
+    ) -> None:
         self.session.execute(delete(PriceBarDailyORM).where(PriceBarDailyORM.asset_id == asset_id))
         records = []
         for row in frame.itertuples(index=False):
@@ -68,6 +88,9 @@ class PricesRepository:
                     low=float(row.low),
                     close=float(row.close),
                     volume=float(row.volume),
+                    provider=provider_name,
+                    is_adjusted=is_adjusted,
+                    inserted_at=datetime.now(UTC).replace(tzinfo=None),
                 )
             )
         self.session.add_all(records)
@@ -88,6 +111,9 @@ class PricesRepository:
                     "low": row.low,
                     "close": row.close,
                     "volume": row.volume,
+                    "provider": row.provider,
+                    "is_adjusted": row.is_adjusted,
+                    "inserted_at": row.inserted_at,
                 }
                 for row in rows
             ]
@@ -110,3 +136,35 @@ class PricesRepository:
 
     def has_data(self, asset_id: int) -> bool:
         return self.row_count(asset_id) > 0
+
+    def earliest_date(self, asset_id: int) -> date | None:
+        statement = (
+            select(PriceBarDailyORM.date)
+            .where(PriceBarDailyORM.asset_id == asset_id)
+            .order_by(PriceBarDailyORM.date.asc())
+            .limit(1)
+        )
+        return self.session.scalar(statement)
+
+    def distinct_providers(
+        self,
+        asset_id: int,
+        *,
+        since_date: date | None = None,
+    ) -> list[str]:
+        statement = select(PriceBarDailyORM.provider).where(PriceBarDailyORM.asset_id == asset_id)
+        if since_date is not None:
+            statement = statement.where(PriceBarDailyORM.date >= since_date)
+        statement = statement.distinct()
+        return [
+            str(provider)
+            for provider in self.session.scalars(statement)
+            if provider not in {None, ""}
+        ]
+
+    def has_recent_provider_mix(self, asset_id: int, window_days: int = 90) -> bool:
+        latest_date = self.latest_date(asset_id)
+        if latest_date is None:
+            return False
+        since_date = latest_date - timedelta(days=window_days)
+        return len(self.distinct_providers(asset_id, since_date=since_date)) > 1

@@ -8,8 +8,10 @@ Spot Opportunity Radar es una herramienta personal de decision support para dete
 - Streamlit
 - SQLite + SQLAlchemy
 - pandas + numpy
+- scipy + scikit-learn
 - pydantic + pydantic-settings
 - httpx
+- yfinance
 - plotly
 - pytest
 - ruff
@@ -34,6 +36,8 @@ tests/         tests unitarios
 - usa modo demo reproducible cuando faltan APIs o un proveedor falla
 - calcula RSI14, SMA50, SMA200, EMA20, ATR14 y posicion relativa en rango de 52 semanas
 - detecta una zona de soporte simple a partir de pivots y minimos recientes
+- detecta zonas de soporte y resistencia con metodos `simple`, `clustering`,
+  `price_time` y `combined`
 - calcula:
   - `technical_score`
   - `risk_score`
@@ -117,6 +121,112 @@ Parametros clave:
 - `allow_demo_fallback`
 - `preserve_real_data_on_provider_failure`
 - `providers_priority`
+- `yfinance_enabled`
+- `yfinance_as_fallback`
+- `yfinance_long_history_enabled`
+- `yfinance_long_history_period`
+- `yfinance_long_history_min_rows`
+- `allow_provider_mixing`
+
+## Deteccion de soportes y resistencias
+
+La deteccion de zonas tecnicas ya no depende solo de minimos recientes.
+
+El proyecto soporta cuatro metodos configurables:
+
+- `simple`: fallback compatible con la logica original
+- `clustering`: pivots locales + `argrelextrema` + `DBSCAN`
+- `price_time`: proxy de HVN usando distribucion de tiempo/precio
+- `combined`: fusiona clustering y price-time y es el metodo recomendado
+
+La configuracion vive en:
+
+- `config/support_detection.yaml`
+
+Parametros principales:
+
+- `method`
+- `historical_window_years`
+- `pivot_order`
+- `use_pivot_highs`
+- `min_cluster_samples`
+- `cluster_eps_pct`
+- `price_time_bins`
+- `hvn_threshold_pct`
+- `combine_proximity_pct`
+- `max_returned_zones`
+- `use_recency_weighting`
+
+Compatibilidad:
+
+- se siguen poblando `support_low`, `support_high` y `distance_to_support_pct`
+- recommendation, invalidation, scoring y backtesting siguen usando esos campos legacy
+- cuando hay varias zonas, los campos legacy se alimentan desde `nearest_support_zone`
+
+Payload ampliado en snapshots tecnicos:
+
+- `support_zones`
+- `resistance_zones`
+- `nearest_support_zone`
+- `major_support_zone`
+- `structural_support_zone`
+- `nearest_resistance_zone`
+- `major_resistance_zone`
+- `structural_resistance_zone`
+
+En `Asset Detail` las zonas se muestran:
+
+- como bandas horizontales translúcidas en el gráfico
+- y como tabla resumida con tipo, rango, distancia, score y touches
+
+## Integracion de yfinance
+
+`yfinance` actua como proveedor secundario/fallback para acciones y ETFs. No sustituye al
+provider principal por defecto.
+
+Uso previsto:
+
+- fallback cuando el provider principal no cubre un simbolo o falla
+- backfill de historico largo para ampliar la cobertura hasta ~5 anos
+- apoyo para analisis estructural, SMA200 y contexto multianual
+
+Politica operativa:
+
+1. SQLite sigue siendo la fuente principal de lectura
+2. primero se intenta servir desde cache si el activo esta `fresh`
+3. si el provider principal falla, se puede probar `yfinance` segun prioridad configurada
+4. si el historico es corto, `yfinance` puede hacer un backfill largo controlado
+5. el sistema inserta solo barras nuevas o mas antiguas faltantes y evita duplicados
+6. no se sobrescribe a ciegas historico bueno existente
+
+Trazabilidad por proveedor:
+
+- cada barra diaria guarda:
+  - `provider`
+  - `is_adjusted`
+  - `inserted_at`
+- el estado del activo guarda:
+  - `primary_provider`
+  - `historical_provider_baseline`
+  - `historical_coverage_start`
+  - `historical_coverage_end`
+  - `recent_provider_mix`
+
+Esto permite detectar si una serie ha recibido backfill o mezcla reciente de fuentes.
+
+Historico largo:
+
+- `yfinance_long_history_period: 5y` permite un backfill largo inicial
+- despues, el refresh diario sigue siendo incremental y cache-first
+- no se redescargan 5 anos cada dia salvo que falte cobertura y la config lo permita
+
+Limitaciones:
+
+- `yfinance` no es una fuente oficial de mercado
+- puede haber diferencias pequenas de OHLC frente a otros providers
+- por eso el proyecto registra el proveedor por barra y deja visible la mezcla reciente
+- la arquitectura intenta mantener un `primary_provider` por activo y usar `yfinance`
+  de forma prudente como fallback o backfill
 
 ## Alpha Vantage gratuito
 
@@ -217,15 +327,23 @@ Esto genera artefactos en `reports/`, incluyendo:
 
 Se descompone en:
 
-- RSI
-- distancia a soporte
-- estructura de tendencia
-- posicion relativa dentro del rango de 52 semanas
+- RSI contextualizado por tendencia
+- distancia a soporte con decaimiento continuo
+- estructura de tendencia mas simetrica
+- momentum relativo dentro del rango de 52 semanas
 
 Regla general:
 
 - score alto: setup tecnico mas limpio o atractivo
 - score bajo: estructura debil, sobrecompra o poco edge en la entrada
+
+Detalles de la version actual:
+
+- RSI bajo en uptrend puntua claramente mejor que RSI bajo en downtrend
+- si el precio esta por debajo del soporte, el componente de soporte cae a cero
+- `death cross` y `golden cross` ahora penalizan/bonifican de forma mas simetrica
+- el rango anual ya no se usa como proxy simple de "cerca de minimos", sino como
+  momentum relativo contextual
 
 ### Risk score
 
@@ -252,6 +370,12 @@ Considera:
 - diversificacion existente
 - cash disponible frente al objetivo
 
+Ademas, en `cold start`:
+
+- si la cartera tiene muy pocas posiciones, el sistema puede aplicar una penalizacion
+  prudente por tipo de activo
+- actualmente `crypto` recibe una penalizacion extra en cartera casi vacia
+
 ### Final opportunity score
 
 Se calcula desde `config/scoring.yaml`:
@@ -262,6 +386,15 @@ final_opportunity_score =
   weight(inverted_risk_score) * (100 - risk_score) +
   weight(portfolio_fit_score) * portfolio_fit_score
 ```
+
+Ahora puede usar pesos adaptativos segun el riesgo:
+
+- riesgo bajo -> mas peso al bloque tecnico
+- riesgo medio -> equilibrio entre tecnico y riesgo
+- riesgo alto -> mas peso al control de riesgo
+
+Si `adaptive_weights.enabled` esta desactivado, el sistema sigue usando la formula
+clasica `50/25/25`.
 
 ## Recomendaciones
 
@@ -280,12 +413,62 @@ El tamano sugerido de posicion depende de:
 
 - `Dashboard`: ranking de oportunidades, heatmap de riesgo, top scores y senales recientes
 - `Watchlist`: filtros por tipo de activo, riesgo y recomendacion con color por fila, mas `data_mode`, `freshness_status` y `last_refresh_source`
-- `Asset Detail`: grafico con medias, soporte, RSI, breakdown del score, rationale, invalidation y estado de datos
+- `Asset Detail`: grafico con medias, soporte, RSI, breakdown del score, rationale,
+  invalidation, provider base y cobertura historica
 - `Portfolio`: exposicion por activo, sector y clase; alertas simples de concentracion
 - `Alerts`: alertas activas, historial, estado de envios y trade intents revisables
 - `Backtesting`: motor historico configurable con modos trade-by-trade, portfolio basico,
   portfolio realista y un modo RSI-only, con reglas de salida, segmentacion,
   persistencia y grid search de parametros
+
+## Score historico bajo demanda
+
+`Asset Detail` puede calcular scores historicos para una fecha concreta o para el rango
+visible del grafico sin tocar el pipeline diario.
+
+Diseno:
+
+- calculo bajo demanda desde UI
+- cache persistente en `historical_score_snapshots`
+- reutiliza la misma logica de indicadores, soportes, riesgo, scoring y recommendation
+- calcula cada fecha en modo `as of`, sin usar datos futuros
+- por defecto usa `portfolio_context = neutral` para que el score historico no dependa de
+  la cartera actual del usuario
+
+Esto permite:
+
+- consultar `technical_score`, `risk_score` y `final_score` en una fecha concreta
+- ver la evolucion historica del score junto al precio
+- recalcular solo las fechas que faltan, manteniendo el resto en cache
+
+## Tuning iterativo del scoring
+
+Existe un runner especifico para iterar ajustes del scoring sin tocar a mano
+`config/scoring.yaml` en cada prueba:
+
+```bash
+python -m jobs.run_scoring_tuning_study
+```
+
+El estudio usa:
+
+- universos de referencia fijos en `config/scoring_tuning.yaml`
+- configuraciones historicas ganadoras por universo
+- iteraciones separadas por bloque de logica:
+  - tendencia lenta
+  - shock regime
+  - soporte con ATR
+  - recommendation gating
+
+Artefactos generados:
+
+- `reports/scoring_tuning_iteration_summary.csv`
+- `reports/scoring_tuning_iteration_details.csv`
+- `reports/scoring_tuning_study.md`
+
+La idea es que cada iteracion compare variantes sobre el mismo conjunto de
+backtests de referencia para aislar el impacto del cambio y seleccionar un
+campeon antes de pasar al siguiente bloque.
 
 ## Alertas y trade intents
 

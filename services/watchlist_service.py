@@ -128,6 +128,15 @@ class WatchlistService:
             "data_mode": data_status.data_mode if data_status else "unknown",
             "freshness_status": data_status.freshness_status if data_status else "missing",
             "last_refresh_source": data_status.last_refresh_source if data_status else None,
+            "primary_provider": data_status.primary_provider if data_status else None,
+            "historical_provider_baseline": (
+                data_status.historical_provider_baseline if data_status else None
+            ),
+            "historical_coverage_start": (
+                data_status.historical_coverage_start if data_status else None
+            ),
+            "historical_coverage_end": data_status.historical_coverage_end if data_status else None,
+            "recent_provider_mix": data_status.recent_provider_mix if data_status else False,
             "last_error_message": data_status.last_error_message if data_status else None,
             "last_available_bar_date": (
                 data_status.last_available_bar_date

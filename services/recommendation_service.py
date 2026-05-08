@@ -16,6 +16,7 @@ class RecommendationService:
         self,
         *,
         asset_id: int,
+        as_of_date: date | None = None,
         technical_snapshot: TechnicalSnapshotModel,
         risk: RiskAssessmentModel,
         final_score: float,
@@ -61,7 +62,7 @@ class RecommendationService:
         }
         return RecommendationModel(
             asset_id=asset_id,
-            date=date.today(),
+            date=as_of_date or date.today(),
             final_score=final_score,
             recommendation=recommendation,
             suggested_buy_low=buy_low,

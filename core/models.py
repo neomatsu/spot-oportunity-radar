@@ -45,6 +45,15 @@ class SupportZoneModel(BaseModel):
     support_zone_low: float | None = None
     support_zone_high: float | None = None
     distance_to_support_pct: float | None = None
+    support_zones: list[dict[str, Any]] = Field(default_factory=list)
+    resistance_zones: list[dict[str, Any]] = Field(default_factory=list)
+    nearest_support_zone: dict[str, Any] | None = None
+    major_support_zone: dict[str, Any] | None = None
+    structural_support_zone: dict[str, Any] | None = None
+    nearest_resistance_zone: dict[str, Any] | None = None
+    major_resistance_zone: dict[str, Any] | None = None
+    structural_resistance_zone: dict[str, Any] | None = None
+    method: str = "simple"
 
 
 class TechnicalSnapshotModel(BaseModel):
@@ -55,6 +64,9 @@ class TechnicalSnapshotModel(BaseModel):
     sma200: float | None = None
     ema20: float | None = None
     atr14: float | None = None
+    week_52_low: float | None = None
+    week_52_high: float | None = None
+    week_52_position: float | None = None
     distance_52w_high_pct: float | None = None
     distance_52w_low_pct: float | None = None
     support_low: float | None = None
@@ -123,10 +135,20 @@ class DataSourcesConfigModel(BaseModel):
     max_staleness_days: int = 5
     allow_demo_fallback: bool = True
     preserve_real_data_on_provider_failure: bool = True
+    yfinance_enabled: bool = True
+    yfinance_as_fallback: bool = True
+    yfinance_long_history_enabled: bool = True
+    yfinance_long_history_period: str = "5y"
+    yfinance_normal_history_period: str = "1y"
+    yfinance_long_history_min_rows: int = 1000
+    yfinance_backfill_asset_types: list[str] = Field(default_factory=lambda: ["stock", "etf"])
+    yfinance_request_pause_seconds: float = 0.5
+    allow_provider_mixing: bool = True
+    recent_provider_mix_window_days: int = 90
     providers_priority: dict[str, list[str]] = Field(
         default_factory=lambda: {
-            "stock": ["fmp", "alphavantage"],
-            "etf": ["fmp", "alphavantage"],
+            "stock": ["fmp", "yfinance", "alphavantage"],
+            "etf": ["fmp", "yfinance", "alphavantage"],
             "crypto": ["binance"],
         }
     )
@@ -139,6 +161,11 @@ class AssetDataStatusModel(BaseModel):
     last_successful_refresh_at: datetime | None = None
     last_refresh_status: str | None = None
     last_refresh_source: str | None = None
+    primary_provider: str | None = None
+    historical_provider_baseline: str | None = None
+    historical_coverage_start: date | None = None
+    historical_coverage_end: date | None = None
+    recent_provider_mix: bool = False
     data_mode: DataMode = DataMode.UNKNOWN
     freshness_status: FreshnessStatus = FreshnessStatus.MISSING
     last_error_message: str | None = None

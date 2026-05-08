@@ -33,3 +33,48 @@ evaluation_score:
   robustness_weight: 0.10
   low_trade_threshold: 10
   low_trade_penalty: 10
+
+# Scoring formula parameters (prefijo scoring_*)
+# Descomenta los que quieras optimizar. Cada parametro adicional
+# multiplica el espacio de busqueda, por lo que se recomienda usarlos
+# en estudios enfocados con pocos parametros de entrada/salida activos.
+#
+# scoring_support_decay:         # Velocidad de decaimiento por distancia al soporte
+#   - 0.20                       # Suave: soportes lejanos aun puntuan bien
+#   - 0.35                       # Valor actual (scoring.yaml)
+#   - 0.50                       # Agresivo: solo soportes muy cercanos puntuan
+#
+# scoring_rsi_oversold_threshold:  # Umbral RSI para zona de sobreventa
+#   - 30
+#   - 35                           # Valor actual
+#   - 40
+#
+# scoring_momentum_optimal_max_position:  # Limite superior de la zona optima en rango 52W
+#   - 0.30
+#   - 0.40                                # Valor actual
+#   - 0.50
+#
+# scoring_trend_golden_cross_bonus:  # Puntos por golden cross (SMA50 > SMA200)
+#   - 8
+#   - 12                             # Valor actual
+#   - 16
+#
+# scoring_roc_weight:              # Peso del componente de velocidad ROC en momentum
+#   - 0.20
+#   - 0.30                         # Valor actual
+#   - 0.40
+#
+# scoring_roc_threshold_pct:       # Umbral ROC10 para considerar momentum alcista/bajista
+#   - 2.0
+#   - 3.0                          # Valor actual
+#   - 5.0
+#
+# scoring_volume_max_points:       # Puntos maximos por confirmacion de volumen
+#   - 6
+#   - 10                           # Valor actual
+#   - 14
+#
+# scoring_volume_high_threshold:   # Multiplicador de vol_ratio para considerar volumen alto
+#   - 1.3
+#   - 1.5                          # Valor actual
+#   - 2.0

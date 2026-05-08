@@ -23,6 +23,11 @@ portfolio_fit:
   asset_type_overweight_penalty: 16
   diversification_bonus: 8
   low_cash_penalty: 14
+  cold_start_position_threshold: 3
+  cold_start_penalties:
+    stock: 0
+    etf: 0
+    crypto: 15
 
 base_add_weights:
   low: 0.05

@@ -1,0 +1,13 @@
+support_detection:
+  method: combined
+  historical_window_years: 5
+  simple_lookback: 90
+  pivot_order: 5
+  use_pivot_highs: true
+  min_cluster_samples: 2
+  cluster_eps_pct: 0.006
+  price_time_bins: 120
+  hvn_threshold_pct: 0.75
+  combine_proximity_pct: 0.008
+  max_returned_zones: 6
+  use_recency_weighting: true

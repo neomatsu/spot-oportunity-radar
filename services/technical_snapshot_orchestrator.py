@@ -37,6 +37,19 @@ class TechnicalSnapshotOrchestrator:
             trend_score=trend_score,
         )
         rationale = {**trend_rationale, **scoring_rationale}
+        rationale.update(
+            {
+                "support_detection_method": support.method,
+                "support_zones": support.support_zones,
+                "resistance_zones": support.resistance_zones,
+                "nearest_support_zone": support.nearest_support_zone,
+                "major_support_zone": support.major_support_zone,
+                "structural_support_zone": support.structural_support_zone,
+                "nearest_resistance_zone": support.nearest_resistance_zone,
+                "major_resistance_zone": support.major_resistance_zone,
+                "structural_resistance_zone": support.structural_resistance_zone,
+            }
+        )
 
         snapshot = TechnicalSnapshotModel(
             asset_id=asset.id,
@@ -46,6 +59,11 @@ class TechnicalSnapshotOrchestrator:
             sma200=self._to_optional_float(latest.get("sma200")),
             ema20=self._to_optional_float(latest.get("ema20")),
             atr14=self._to_optional_float(latest.get("atr14")),
+            week_52_low=self._to_optional_float(latest.get("week_52_low")),
+            week_52_high=self._to_optional_float(latest.get("week_52_high")),
+            week_52_position=self._to_optional_float(
+                scoring_rationale.get("week_52_position")
+            ),
             distance_52w_high_pct=self._to_optional_float(latest.get("distance_52w_high_pct")),
             distance_52w_low_pct=self._to_optional_float(latest.get("distance_52w_low_pct")),
             support_low=support.support_zone_low,
