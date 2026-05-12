@@ -58,6 +58,9 @@ class AssetORM(Base):
     )
     positions: Mapped[list[PortfolioPositionORM]] = relationship(back_populates="asset")
     signals: Mapped[list[SignalORM]] = relationship(back_populates="asset")
+    market_regime_history: Mapped[list[MarketRegimeHistoryORM]] = relationship(
+        back_populates="asset"
+    )
     data_status: Mapped[AssetDataStatusORM | None] = relationship(back_populates="asset")
     refresh_logs: Mapped[list[DataRefreshLogORM]] = relationship(back_populates="asset")
     backtest_trades: Mapped[list[BacktestTradeORM]] = relationship(back_populates="asset")
@@ -188,6 +191,24 @@ class HistoricalScoreSnapshotORM(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     source_version: Mapped[str] = mapped_column(String(80), index=True)
     portfolio_context: Mapped[str] = mapped_column(String(30), default="neutral")
+
+
+class MarketRegimeHistoryORM(Base):
+    __tablename__ = "market_regime_history"
+    __table_args__ = (UniqueConstraint("asset_id", "date", name="uq_regime_asset_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    bull_probability: Mapped[float] = mapped_column(Float)
+    bear_probability: Mapped[float] = mapped_column(Float)
+    bubble_probability: Mapped[float] = mapped_column(Float)
+    dominant_regime: Mapped[str] = mapped_column(String(20), index=True)
+    breakdown_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+    asset: Mapped[AssetORM] = relationship(back_populates="market_regime_history")
 
 
 class AppConfigORM(Base):

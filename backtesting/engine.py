@@ -20,6 +20,8 @@ from data.database import AssetORM
 from data.repositories.assets_repo import AssetsRepository
 from data.repositories.backtest_repo import BacktestRepository
 from data.repositories.prices_repo import PricesRepository
+from market_regime.regime_models import MarketRegime
+from market_regime.regime_service import MarketRegimeService
 from services.position_management_alerts_service import (
     PositionContext,
     PositionManagementAlertsService,
@@ -47,6 +49,9 @@ class BacktestEngine:
         self.rebalance_service = RebalanceService()
         self.recommendation_service = RecommendationService()
         self.position_management_alerts_service = PositionManagementAlertsService()
+        self.market_regime_service = MarketRegimeService()
+        self._market_regime_cache: dict[tuple[int, date], MarketRegime] = {}
+        self._market_regime_prepared_frames: dict[int, pd.DataFrame] = {}
 
     def run(
         self,
@@ -65,6 +70,15 @@ class BacktestEngine:
             asset.id: self._load_asset_frame(asset, scenario.start_date, scenario.end_date)
             for asset in assets
         }
+        if scenario.regime_filter_rules.enabled:
+            self._market_regime_prepared_frames.update(
+                {
+                    asset.id: self.market_regime_service._prepare_frame(frames[asset.id])
+                    for asset in assets
+                    if asset.id not in self._market_regime_prepared_frames
+                    and not frames[asset.id].empty
+                }
+            )
         portfolio_events: list[dict[str, Any]] = []
         portfolio_summary: dict[str, Any] = {}
         cash_curve: list[dict[str, Any]] = []
@@ -333,7 +347,13 @@ class BacktestEngine:
                 ):
                     continue
                 signal = self.evaluate_signal_point(asset, frame, index, exposure=empty_exposure)
-                if signal is None or not self._entry_allowed(signal, scenario):
+                if signal is None or not self._entry_allowed(
+                    signal,
+                    scenario,
+                    asset=asset,
+                    frame=frame,
+                    index=index,
+                ):
                     continue
 
                 trade, exit_index = self.simulate_trade(
@@ -396,7 +416,13 @@ class BacktestEngine:
                     index,
                     current_exposure,
                 )
-                if signal is None or not self._entry_allowed(signal, scenario):
+                if signal is None or not self._entry_allowed(
+                    signal,
+                    scenario,
+                    asset=asset,
+                    frame=frame,
+                    index=index,
+                ):
                     continue
 
                 position_pct = self._position_pct(
@@ -555,7 +581,13 @@ class BacktestEngine:
                 ):
                     continue
                 signal = self.evaluate_signal_point(asset, frames[asset.id], index, exposure)
-                if signal is None or not self._entry_allowed(signal, scenario):
+                if signal is None or not self._entry_allowed(
+                    signal,
+                    scenario,
+                    asset=asset,
+                    frame=frames[asset.id],
+                    index=index,
+                ):
                     continue
                 order = self._build_buy_order(
                     asset=asset,
@@ -1345,6 +1377,7 @@ class BacktestEngine:
             if rules.use_suggested_weight_add
             else (rules.buy_weight_override_pct or scenario.execution_rules.fixed_position_pct)
         )
+        desired_weight *= self._regime_position_size_multiplier(signal, scenario)
         desired_value = total_equity * desired_weight
         available_cash = max(0.0, cash - (rules.cash_min_target_pct * total_equity))
         desired_value = min(desired_value, available_cash)
@@ -2079,7 +2112,15 @@ class BacktestEngine:
         ]
         return working.reset_index(drop=True)
 
-    def _entry_allowed(self, signal: HistoricalSignal, scenario: BacktestScenario) -> bool:
+    def _entry_allowed(
+        self,
+        signal: HistoricalSignal,
+        scenario: BacktestScenario,
+        *,
+        asset: AssetORM | None = None,
+        frame: pd.DataFrame | None = None,
+        index: int | None = None,
+    ) -> bool:
         if signal.final_score < scenario.entry_rules.min_final_score:
             return False
         if signal.risk_score > scenario.entry_rules.max_risk_score:
@@ -2099,7 +2140,96 @@ class BacktestEngine:
             return False
         if scenario.entry_rules.require_bullish_trend and not signal.trend_bullish:
             return False
-        return signal.recommendation in scenario.entry_rules.allowed_recommendations
+        if signal.recommendation not in scenario.entry_rules.allowed_recommendations:
+            return False
+        return self._market_regime_entry_allowed(
+            signal,
+            scenario,
+            asset=asset,
+            frame=frame,
+            index=index,
+        )
+
+    def _market_regime_entry_allowed(
+        self,
+        signal: HistoricalSignal,
+        scenario: BacktestScenario,
+        *,
+        asset: AssetORM | None,
+        frame: pd.DataFrame | None,
+        index: int | None,
+    ) -> bool:
+        rules = scenario.regime_filter_rules
+        if not rules.enabled:
+            return True
+        if asset is None or frame is None or index is None:
+            signal.rationale["market_regime_filter"] = {
+                "allowed": False,
+                "reason": "missing_regime_context",
+            }
+            return False
+
+        regime = self._market_regime_for_point(asset, frame, index)
+        multiplier = 1.0
+        reason = "allowed"
+        allowed = True
+        if (
+            rules.min_bull_probability is not None
+            and regime.bull_probability < rules.min_bull_probability
+        ):
+            allowed = False
+            reason = "bull_probability_below_min"
+        if (
+            allowed
+            and rules.max_bear_probability is not None
+            and regime.bear_probability > rules.max_bear_probability
+        ):
+            allowed = False
+            reason = "bear_probability_above_max"
+        if (
+            allowed
+            and rules.reduce_size_if_bubble_probability_gt is not None
+            and regime.bubble_probability > rules.reduce_size_if_bubble_probability_gt
+        ):
+            multiplier = max(0.0, min(1.0, rules.bubble_position_size_multiplier))
+            reason = "bubble_size_reduction"
+
+        signal.rationale["market_regime_filter"] = {
+            "allowed": allowed,
+            "reason": reason,
+            "bull_probability": regime.bull_probability,
+            "bear_probability": regime.bear_probability,
+            "bubble_probability": regime.bubble_probability,
+            "dominant_regime": regime.dominant_regime,
+            "position_size_multiplier": multiplier if allowed else 0.0,
+        }
+        return allowed
+
+    def _market_regime_for_point(
+        self,
+        asset: AssetORM,
+        frame: pd.DataFrame,
+        index: int,
+    ) -> MarketRegime:
+        as_of_date = pd.Timestamp(frame.iloc[index]["date"]).date()
+        cache_key = (asset.id, as_of_date)
+        cached = self._market_regime_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        prepared = self._market_regime_prepared_frames.get(asset.id)
+        if prepared is not None:
+            regime = self.market_regime_service.compute_regime_from_prepared_frame(
+                prepared,
+                as_of_date=as_of_date,
+            )
+            self._market_regime_cache[cache_key] = regime
+            return regime
+        regime = self.market_regime_service.compute_regime(
+            frame.iloc[: index + 1],
+            as_of_date=as_of_date,
+        )
+        self._market_regime_cache[cache_key] = regime
+        return regime
 
     def _position_pct(
         self,
@@ -2112,7 +2242,18 @@ class BacktestEngine:
             target = signal.suggested_weight_add_pct / 100
         else:
             target = scenario.execution_rules.fixed_position_pct
+        target *= self._regime_position_size_multiplier(signal, scenario)
         return round(min(max(0.0, target), available_cash_pct), 4)
+
+    @staticmethod
+    def _regime_position_size_multiplier(
+        signal: HistoricalSignal,
+        scenario: BacktestScenario,
+    ) -> float:
+        if not scenario.regime_filter_rules.enabled:
+            return 1.0
+        regime_payload = signal.rationale.get("market_regime_filter", {})
+        return float(regime_payload.get("position_size_multiplier", 1.0) or 0.0)
 
     def _exposure_from_open_trades(
         self,

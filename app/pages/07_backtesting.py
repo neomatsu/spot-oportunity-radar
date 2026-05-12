@@ -245,6 +245,16 @@ with st.form("backtesting_form"):
     sell_stop = float(sale_cfg["stop_loss_warning"] * 100)
     sell_rebalance = float(sale_cfg["rebalance_sell"] * 100)
     sell_overbought = float(sale_cfg["overbought_warning"] * 100)
+    regime_cfg = config.get("regime_filter", {})
+    use_regime_filter = bool(regime_cfg.get("enabled", False))
+    min_bull_probability = float(regime_cfg.get("min_bull_probability") or 0.0)
+    max_bear_probability = float(regime_cfg.get("max_bear_probability") or 100.0)
+    reduce_size_if_bubble_probability_gt = float(
+        regime_cfg.get("reduce_size_if_bubble_probability_gt") or 100.0
+    )
+    bubble_position_size_multiplier = float(
+        regime_cfg.get("bubble_position_size_multiplier", 0.5) * 100
+    )
 
     if not is_rsi_mode:
         col18, col19, col20 = st.columns(3)
@@ -316,6 +326,48 @@ with st.form("backtesting_form"):
             max_value=100.0,
             value=float(sale_cfg["overbought_warning"] * 100),
             step=5.0,
+        )
+        st.subheader("Filtro opcional de regimen de mercado")
+        st.caption(
+            "No cambia el scoring: solo filtra entradas del backtest y puede reducir el "
+            "tamano de compra si hay riesgo de burbuja."
+        )
+        regime_col1, regime_col2, regime_col3, regime_col4 = st.columns(4)
+        use_regime_filter = regime_col1.checkbox(
+            "Activar filtro de regimen",
+            value=use_regime_filter,
+        )
+        min_bull_probability = regime_col2.number_input(
+            "Comprar solo si Bull > (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=min_bull_probability,
+            step=5.0,
+            disabled=not use_regime_filter,
+        )
+        max_bear_probability = regime_col3.number_input(
+            "Evitar si Bear > (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=max_bear_probability,
+            step=5.0,
+            disabled=not use_regime_filter,
+        )
+        reduce_size_if_bubble_probability_gt = regime_col4.number_input(
+            "Reducir si Bubble > (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=reduce_size_if_bubble_probability_gt,
+            step=5.0,
+            disabled=not use_regime_filter,
+        )
+        bubble_position_size_multiplier = st.number_input(
+            "Multiplicador de tamano si Bubble supera umbral (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=bubble_position_size_multiplier,
+            step=5.0,
+            disabled=not use_regime_filter,
         )
 
     rsi_cfg = config.get("rsi_cycle_strategy", {})
@@ -525,6 +577,15 @@ scenario = scenario_with_overrides(
             "rebalance_sell": sell_rebalance / 100,
             "overbought_warning": sell_overbought / 100,
         },
+    },
+    regime_filter_overrides={
+        "enabled": use_regime_filter and not is_rsi_mode,
+        "min_bull_probability": min_bull_probability if use_regime_filter else None,
+        "max_bear_probability": max_bear_probability if use_regime_filter else None,
+        "reduce_size_if_bubble_probability_gt": (
+            reduce_size_if_bubble_probability_gt if use_regime_filter else None
+        ),
+        "bubble_position_size_multiplier": bubble_position_size_multiplier / 100,
     },
     rsi_cycle_overrides=(
         {

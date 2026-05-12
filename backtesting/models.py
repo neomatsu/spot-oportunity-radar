@@ -87,6 +87,15 @@ class PortfolioSimulationRules:
 
 
 @dataclass(slots=True)
+class RegimeFilterRules:
+    enabled: bool
+    min_bull_probability: float | None
+    max_bear_probability: float | None
+    reduce_size_if_bubble_probability_gt: float | None
+    bubble_position_size_multiplier: float
+
+
+@dataclass(slots=True)
 class RSICycleRules:
     oversold_threshold: float
     deep_oversold_threshold_1: float
@@ -146,6 +155,7 @@ class BacktestScenario:
     execution_rules: ExecutionRules
     evaluation_rules: EvaluationRules
     portfolio_simulation_rules: PortfolioSimulationRules
+    regime_filter_rules: RegimeFilterRules
     rsi_cycle_rules: RSICycleRules = field(default_factory=default_rsi_cycle_rules)
     scoring_overrides: dict[str, Any] = field(default_factory=dict)
 
@@ -209,6 +219,17 @@ class BacktestScenario:
                     self.portfolio_simulation_rules.sell_reduction_by_alert_type
                 ),
                 "sell_priority": list(self.portfolio_simulation_rules.sell_priority),
+            },
+            "regime_filter_rules": {
+                "enabled": self.regime_filter_rules.enabled,
+                "min_bull_probability": self.regime_filter_rules.min_bull_probability,
+                "max_bear_probability": self.regime_filter_rules.max_bear_probability,
+                "reduce_size_if_bubble_probability_gt": (
+                    self.regime_filter_rules.reduce_size_if_bubble_probability_gt
+                ),
+                "bubble_position_size_multiplier": (
+                    self.regime_filter_rules.bubble_position_size_multiplier
+                ),
             },
             "scoring_overrides": self.scoring_overrides,
             "rsi_cycle_rules": {

@@ -417,9 +417,58 @@ El tamano sugerido de posicion depende de:
   invalidation, provider base y cobertura historica
 - `Portfolio`: exposicion por activo, sector y clase; alertas simples de concentracion
 - `Alerts`: alertas activas, historial, estado de envios y trade intents revisables
+- `Market Regime Detector`: contexto bull/bear/bubble por activo, historico persistido
+  y grafica de probabilidades frente al precio
 - `Backtesting`: motor historico configurable con modos trade-by-trade, portfolio basico,
   portfolio realista y un modo RSI-only, con reglas de salida, segmentacion,
   persistencia y grid search de parametros
+
+## Market Regime Detector
+
+La app incluye un modulo observacional de regimen de mercado. No modifica el scoring,
+las recomendaciones, las alertas ni el backtesting operativo.
+
+Calcula para cada activo:
+
+- `bull_probability`
+- `bear_probability`
+- `bubble_probability`
+- `dominant_regime`: `BULL`, `BEAR` o `TRANSITION`
+
+`bubble_probability` se trata como overlay de riesgo, no como regimen dominante. Un
+activo puede estar en contexto bull y tener al mismo tiempo riesgo de sobreextension.
+
+La logica es interpretable y rule-based:
+
+- bull: precio y medias por encima de `SMA200`, estructura de maximos/minimos,
+  RSI constructivo y fuerza relativa frente al benchmark
+- bear: perdida de `SMA200`, `SMA50 < SMA200`, drawdown, estructura bajista y
+  debilidad relativa
+- bubble: extension frente a `SMA200`, aceleracion, expansion de volatilidad y
+  proximidad repetida a maximos
+
+Configuracion:
+
+- defaults externos en `config/regime_config.yaml`
+- defaults de paquete en `market_regime/regime_config.yaml`
+- benchmark relativo por defecto: `SPY`
+
+Persistencia:
+
+- tabla `market_regime_history`
+- unique por `asset_id + date`
+- guarda probabilidades, regimen dominante y breakdown JSON
+
+Uso en UI:
+
+- abrir `Market Regime Detector`
+- seleccionar activo
+- calcular regimen actual o historico del rango
+- revisar badge, barras de probabilidades y grafico historico frente al precio
+
+Esta primera fase deja el modulo listo para validar visualmente el contexto antes de
+decidir si en el futuro entra como filtro de backtesting o como ajuste opcional del
+scoring.
 
 ## Score historico bajo demanda
 

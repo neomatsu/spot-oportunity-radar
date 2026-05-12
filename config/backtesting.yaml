@@ -80,6 +80,13 @@ portfolio_simulation:
     - rebalance_sell
     - overbought_warning
 
+regime_filter:
+  enabled: false
+  min_bull_probability: null
+  max_bear_probability: null
+  reduce_size_if_bubble_probability_gt: null
+  bubble_position_size_multiplier: 0.50
+
 rsi_cycle_strategy:
   oversold_threshold: 30
   deep_oversold_threshold_1: 25

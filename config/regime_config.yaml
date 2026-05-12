@@ -1,0 +1,37 @@
+sma_distance_thresholds:
+  moderate: 0.20
+  high: 0.40
+  extreme: 0.60
+
+drawdown_thresholds:
+  mild: 0.15
+  medium: 0.30
+  severe: 0.50
+
+rsi_thresholds:
+  bull_min: 45
+  bull_max: 70
+  bear_max: 40
+  bubble: 70
+  extreme: 80
+
+structure:
+  lookback_short: 20
+  lookback_long: 60
+
+relative_strength:
+  benchmark_symbol: SPY
+  lookback_days: 63
+  neutral_score: 50
+
+volatility:
+  lookback_short: 20
+  lookback_long: 120
+  expansion_ratio_high: 1.5
+
+acceleration:
+  short_roc_days: 20
+  long_roc_days: 60
+
+history:
+  min_rows: 220

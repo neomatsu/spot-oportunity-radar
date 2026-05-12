@@ -14,6 +14,7 @@ from backtesting.models import (
     ExitStrategy,
     PortfolioSimulationRules,
     PositionSizeMode,
+    RegimeFilterRules,
     StrategyMetrics,
 )
 from backtesting.optimizer import BacktestOptimizer
@@ -70,6 +71,13 @@ def _scenario() -> BacktestScenario:
             min_residual_position_value=150.0,
             sell_reduction_by_alert_type={"exit_candidate": 1.0},
             sell_priority=("exit_candidate",),
+        ),
+        regime_filter_rules=RegimeFilterRules(
+            enabled=False,
+            min_bull_probability=None,
+            max_bear_probability=None,
+            reduce_size_if_bubble_probability_gt=None,
+            bubble_position_size_multiplier=0.5,
         ),
     )
 

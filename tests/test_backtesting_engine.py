@@ -19,6 +19,7 @@ from backtesting.scenarios import (
     split_in_sample_out_of_sample,
 )
 from data.database import AssetORM, PriceBarDailyORM
+from market_regime.regime_models import MarketRegime
 
 
 def _seed_asset_with_prices(db_session, symbol: str = "TEST") -> AssetORM:
@@ -136,6 +137,78 @@ def test_engine_generates_trades_from_relaxed_signal_rules(db_session) -> None:
     assert result.metrics.total_trades > 0
     assert all(trade.entry_date <= trade.exit_date for trade in result.trades)
     assert all(trade.exit_reason == "fixed_horizon" for trade in result.trades[:3])
+
+
+def test_regime_filter_blocks_entries_when_bull_is_too_low(db_session) -> None:
+    asset = _seed_asset_with_prices(db_session)
+    engine = BacktestEngine(db_session)
+    scenario = scenario_with_overrides(
+        _make_scenario(asset.symbol),
+        regime_filter_overrides={
+            "enabled": True,
+            "min_bull_probability": 60,
+            "max_bear_probability": 80,
+            "reduce_size_if_bubble_probability_gt": None,
+        },
+    )
+    low_bull_regime = MarketRegime(
+        bull_probability=35,
+        bear_probability=45,
+        bubble_probability=20,
+        dominant_regime="TRANSITION",
+    )
+    engine.market_regime_service.compute_regime = lambda *_, **__: low_bull_regime
+    engine.market_regime_service.compute_regime_from_prepared_frame = (
+        lambda *_, **__: low_bull_regime
+    )
+
+    result = engine.run(scenario, persist=False)
+
+    assert result.metrics.total_trades == 0
+
+
+def test_regime_filter_reduces_position_size_when_bubble_is_high(db_session) -> None:
+    engine = BacktestEngine(db_session)
+    scenario = scenario_with_overrides(
+        _make_scenario("TEST"),
+        regime_filter_overrides={
+            "enabled": True,
+            "min_bull_probability": 40,
+            "max_bear_probability": 70,
+            "reduce_size_if_bubble_probability_gt": 65,
+            "bubble_position_size_multiplier": 0.5,
+        },
+    )
+    signal = HistoricalSignal(
+        asset_id=1,
+        symbol="TEST",
+        name="Test",
+        asset_type="etf",
+        sector="Broad Market",
+        signal_date=date(2024, 1, 1),
+        technical_score=70,
+        risk_score=20,
+        portfolio_fit_score=90,
+        final_score=80,
+        recommendation="BUY_CANDIDATE",
+        rsi14=45,
+        sma50=100,
+        distance_to_support_pct=1,
+        support_low=98,
+        support_high=102,
+        trend_bullish=True,
+        suggested_weight_add_pct=10,
+        invalidation_level=98,
+        rationale={
+            "market_regime_filter": {
+                "position_size_multiplier": 0.5,
+            }
+        },
+    )
+
+    position_pct = engine._position_pct(signal, scenario, available_cash_pct=1.0)
+
+    assert position_pct == 0.025
 
 
 def test_fixed_horizon_exit_rule(db_session) -> None:

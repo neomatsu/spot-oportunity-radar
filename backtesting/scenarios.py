@@ -14,6 +14,7 @@ from backtesting.models import (
     ExitStrategy,
     PortfolioSimulationRules,
     PositionSizeMode,
+    RegimeFilterRules,
     RSICycleRules,
 )
 from core.config import load_yaml_config
@@ -41,6 +42,7 @@ def default_backtest_scenario(
     evaluation = config["evaluation"]
     portfolio = config["portfolio"]
     portfolio_sim = config.get("portfolio_simulation", {})
+    regime_filter = config.get("regime_filter", {})
     rsi_cycle = config.get("rsi_cycle_strategy", {})
 
     default_end = end_date or date.today()
@@ -130,6 +132,17 @@ def default_backtest_scenario(
                 )
             ),
         ),
+        regime_filter_rules=RegimeFilterRules(
+            enabled=bool(regime_filter.get("enabled", False)),
+            min_bull_probability=_optional_float(regime_filter.get("min_bull_probability")),
+            max_bear_probability=_optional_float(regime_filter.get("max_bear_probability")),
+            reduce_size_if_bubble_probability_gt=_optional_float(
+                regime_filter.get("reduce_size_if_bubble_probability_gt")
+            ),
+            bubble_position_size_multiplier=float(
+                regime_filter.get("bubble_position_size_multiplier", 0.5)
+            ),
+        ),
         rsi_cycle_rules=RSICycleRules(
             oversold_threshold=float(rsi_cycle.get("oversold_threshold", 30)),
             deep_oversold_threshold_1=float(rsi_cycle.get("deep_oversold_threshold_1", 25)),
@@ -161,6 +174,7 @@ def scenario_with_overrides(
     exit_overrides: dict[str, Any] | None = None,
     execution_overrides: dict[str, Any] | None = None,
     portfolio_simulation_overrides: dict[str, Any] | None = None,
+    regime_filter_overrides: dict[str, Any] | None = None,
     rsi_cycle_overrides: dict[str, Any] | None = None,
     scoring_overrides: dict[str, Any] | None = None,
 ) -> BacktestScenario:
@@ -213,6 +227,18 @@ def scenario_with_overrides(
         "sell_priority": base.portfolio_simulation_rules.sell_priority,
     }
     portfolio_sim.update(portfolio_simulation_overrides or {})
+    regime_filter = {
+        "enabled": base.regime_filter_rules.enabled,
+        "min_bull_probability": base.regime_filter_rules.min_bull_probability,
+        "max_bear_probability": base.regime_filter_rules.max_bear_probability,
+        "reduce_size_if_bubble_probability_gt": (
+            base.regime_filter_rules.reduce_size_if_bubble_probability_gt
+        ),
+        "bubble_position_size_multiplier": (
+            base.regime_filter_rules.bubble_position_size_multiplier
+        ),
+    }
+    regime_filter.update(regime_filter_overrides or {})
     rsi_cycle = {
         "oversold_threshold": base.rsi_cycle_rules.oversold_threshold,
         "deep_oversold_threshold_1": base.rsi_cycle_rules.deep_oversold_threshold_1,
@@ -299,7 +325,20 @@ def scenario_with_overrides(
             sell_reduction_by_alert_type=dict(portfolio_sim["sell_reduction_by_alert_type"]),
             sell_priority=tuple(portfolio_sim["sell_priority"]),
         ),
-        scoring_overrides=scoring_overrides if scoring_overrides is not None else base.scoring_overrides,
+        regime_filter_rules=RegimeFilterRules(
+            enabled=bool(regime_filter["enabled"]),
+            min_bull_probability=_optional_float(regime_filter["min_bull_probability"]),
+            max_bear_probability=_optional_float(regime_filter["max_bear_probability"]),
+            reduce_size_if_bubble_probability_gt=_optional_float(
+                regime_filter["reduce_size_if_bubble_probability_gt"]
+            ),
+            bubble_position_size_multiplier=float(
+                regime_filter["bubble_position_size_multiplier"]
+            ),
+        ),
+        scoring_overrides=(
+            scoring_overrides if scoring_overrides is not None else base.scoring_overrides
+        ),
         rsi_cycle_rules=RSICycleRules(
             oversold_threshold=float(rsi_cycle["oversold_threshold"]),
             deep_oversold_threshold_1=float(rsi_cycle["deep_oversold_threshold_1"]),
