@@ -1,0 +1,121 @@
+# Crypto Pump Radar - configuracion del modulo de alta especulacion.
+# Este modulo es INDEPENDIENTE del scoring principal, alertas, cartera y backtesting.
+# Solo se ejecuta cuando el usuario lo lanza explicitamente o via su job dedicado.
+
+scanner:
+  enabled: true
+  chains:
+    - solana
+    - ethereum
+    - base
+    - bsc
+  # Limite global de candidatos retornados por el scanner (post-filtros).
+  max_candidates_per_scan: 300
+  # Top N que sale en la UI y en el CLI.
+  top_n: 10
+  # Filtros de salud minima del par. Pares fuera de estos rangos se descartan.
+  min_liquidity_usd: 50000
+  max_liquidity_usd: 20000000
+  min_volume_1h_usd: 20000
+  min_volume_24h_usd: 100000
+  min_txns_1h: 50
+  # Pares mas viejos que esto se filtran (pasaron su ventana de pump temprano).
+  max_pair_age_days: 180
+  # Pares recien creados (<= este valor) se descartan: riesgo extremo de rug.
+  exclude_pair_age_minutes_under: 15
+  # Numero maximo de "queries semilla" por chain antes de fusionar resultados.
+  max_search_terms_per_chain: 6
+  # Timeout HTTP por peticion al provider (segundos).
+  request_timeout_seconds: 20.0
+  # Pausa entre peticiones para respetar rate limits.
+  request_pause_seconds: 0.2
+
+scoring:
+  # Pesos para el score final especulativo. Se normalizan en runtime, por lo que
+  # se pueden modificar sin preocuparse del rango exacto.
+  weights:
+    pump_momentum: 0.30
+    liquidity_quality: 0.20
+    transaction_quality: 0.20
+    early_trend: 0.20
+    rug_risk: 0.25          # penalizacion (resta)
+    prior_pump_penalty: 0.15 # penalizacion (resta)
+
+  # Umbrales que separan las clasificaciones del final_speculative_score.
+  classification_bands:
+    ignore: 35
+    watch: 55
+    early_momentum: 70
+    high_risk_pump: 85
+    # >= 85 => EXTREME_SPECULATION
+
+  pump_momentum:
+    # Por encima de estas variaciones (en %) se considera "fuerte" y se da score alto.
+    strong_5m_pct: 8
+    strong_1h_pct: 25
+    strong_6h_pct: 60
+    # Ratio volumen_1h / (volumen_24h/24): >1 implica que la hora actual ya supera la media.
+    accelerating_volume_ratio: 2.0
+    # Buys/sells ratio considerado bullish.
+    bullish_buys_ratio: 1.4
+
+  liquidity_quality:
+    healthy_liquidity_usd: 250000
+    excellent_liquidity_usd: 1500000
+    # Si volume_24h/liquidity > este valor, la actividad es sospechosamente parabolica.
+    max_volume_to_liquidity_ratio: 50
+
+  transaction_quality:
+    healthy_txns_1h: 200
+    excellent_txns_1h: 800
+    min_buys_ratio: 0.45  # < 0.45 => ventas dominantes => penaliza
+
+  early_trend:
+    # Definicion de "temprano": cambio 24h aun moderado, pero 1h/6h despertando.
+    max_24h_for_early_pct: 80
+    min_1h_for_early_pct: 3
+    healthy_volume_growth_ratio: 1.5  # vol_1h / vol_6h_promedio_horario
+
+  prior_pump_penalty:
+    # Por encima de estos umbrales se asume "pump ya hecho" y se penaliza.
+    excessive_24h_pct: 150
+    excessive_6h_pct: 80
+    # Penalizacion adicional si hay snapshots historicos con scores altos previos.
+    historical_score_threshold: 70
+
+  rug_risk:
+    # Liquidez por debajo de este nivel implica riesgo muy alto.
+    very_low_liquidity_usd: 30000
+    # FDV/liquidez por encima de este ratio => "valoracion gigante sin liquidez".
+    max_fdv_to_liquidity_ratio: 200
+    # Pares con edad menor que esto reciben penalizacion progresiva.
+    new_pair_age_hours: 2
+    very_new_pair_age_hours: 0.5
+    # Chains consideradas mas riesgosas (heuristica conservadora).
+    high_risk_chains:
+      - pulsechain
+      - tron
+      - solana  # se incluye porque la prevalencia de rugs es alta historicamente
+
+manual_lookup:
+  # Limites de seguridad para la pestania de analisis manual.
+  max_history_snapshots: 1000
+  default_history_days: 14
+
+replay:
+  # Cuantos snapshots posteriores como maximo se usan para evaluar drawdown / max-up.
+  forward_lookback_snapshots: 200
+
+ui:
+  # Texto extra de advertencia que se muestra en la pagina.
+  risk_disclaimer: >
+    Este modulo es exploratorio y de ALTA ESPECULACION. Los scores NO predicen
+    movimientos con certeza. Existe riesgo de perdida total por rug-pull,
+    honeypots y manipulacion. Datos posiblemente incompletos.
+
+job:
+  # Configuracion del job CLI run_crypto_pump_scan.
+  default_dry_run: false
+  log_top_n: 10
+  # No tocar el job diario principal. Este job es independiente.
+  affects_main_daily_job: false

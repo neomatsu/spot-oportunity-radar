@@ -472,6 +472,82 @@ class ScheduledJobRunORM(Base):
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
+# --- Crypto Pump Radar -----------------------------------------------------------
+# Modulo independiente: NO afecta scoring principal, alertas, cartera ni backtesting.
+
+class CryptoPumpSnapshotORM(Base):
+    __tablename__ = "crypto_pump_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC), index=True
+    )
+    chain: Mapped[str] = mapped_column(String(40), index=True)
+    dex_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    pair_address: Mapped[str] = mapped_column(String(80), index=True)
+    symbol: Mapped[str] = mapped_column(String(80), index=True)
+    base_token_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    base_token_address: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    quote_token_symbol: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    price_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fdv: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    volume_5m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume_6h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    buys_5m: Mapped[int | None] = mapped_column(nullable=True)
+    sells_5m: Mapped[int | None] = mapped_column(nullable=True)
+    buys_1h: Mapped[int | None] = mapped_column(nullable=True)
+    sells_1h: Mapped[int | None] = mapped_column(nullable=True)
+    buys_6h: Mapped[int | None] = mapped_column(nullable=True)
+    sells_6h: Mapped[int | None] = mapped_column(nullable=True)
+    buys_24h: Mapped[int | None] = mapped_column(nullable=True)
+    sells_24h: Mapped[int | None] = mapped_column(nullable=True)
+
+    price_change_5m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_change_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_change_6h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_change_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    pair_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pair_age_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    pump_momentum_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liquidity_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transaction_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    early_trend_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prior_pump_penalty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rug_risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_speculative_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    classification: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+
+    scan_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_pump_scan_runs.id"), nullable=True, index=True
+    )
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class CryptoPumpScanRunORM(Base):
+    __tablename__ = "crypto_pump_scan_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC), index=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="running")
+    query_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    chains_scanned: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    candidates_found: Mapped[int] = mapped_column(default=0)
+    top_candidates_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
 settings = get_settings()
 db_path = settings.db_url.replace("sqlite:///", "")
 if settings.db_url.startswith("sqlite:///") and not Path(db_path).is_absolute():

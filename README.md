@@ -1011,6 +1011,130 @@ Puedes afinar el comportamiento sin tocar codigo:
 - `config/optimization.yaml`: grids de parametros y score compuesto de evaluacion
 - `config/assets.yaml`: watchlist
 
+## Crypto Pump Radar
+
+Modulo INDEPENDIENTE de alta especulacion para detectar criptomonedas con
+senales tempranas de posible movimiento fuerte (pump). NO afecta al scoring
+principal, alertas, Telegram, cartera ni al backtesting actuales. Vive en su
+propia pagina, su propio job y sus propias tablas.
+
+> Advertencia: alta especulacion. Riesgo de perdida total por rug-pull,
+> honeypots y manipulacion. Los scores son heuristicos: NO predicen pumps con
+> certeza y los datos pueden estar incompletos.
+
+### Que hace
+
+- Escanea DexScreener para detectar pares DEX con momentum reciente.
+- Aplica filtros minimos de salud (liquidez, volumen, edad del par, txns).
+- Calcula varios sub-scores y un `final_speculative_score` de 0 a 100.
+- Genera un Top N (10 por defecto) y persiste snapshots con timestamp.
+- Permite buscar tokens / pares concretos y reconstruir su historico.
+- Marca en la grafica cuando habria saltado cada clasificacion.
+- Hace un replay ligero (max-up posterior y drawdown) si hay snapshots suficientes.
+
+### Fuentes de datos
+
+Provider principal:
+
+- `DexScreenerProvider` (`data/providers/dexscreener_provider.py`) → endpoints
+  publicos de DexScreener (`/latest/dex/search`, `/latest/dex/pairs/...`,
+  `/latest/dex/tokens/...`).
+
+Previstos para fases futuras (no implementados todavia): Birdeye, CoinGecko,
+exploradores on-chain, honeypot scanners, APIs de holders.
+
+### Como ejecutar un scan
+
+UI Streamlit:
+
+```bash
+streamlit run app/main.py
+# luego abre la pagina "09 Crypto Pump Radar"
+```
+
+CLI:
+
+```bash
+python -m jobs.run_crypto_pump_scan
+python -m jobs.run_crypto_pump_scan --dry-run
+python -m jobs.run_crypto_pump_scan --chains solana ethereum --top 5
+python -m jobs.run_crypto_pump_scan --json-output
+```
+
+Toda la configuracion vive en `config/crypto_pump_radar.yaml`: chains,
+umbrales de filtro, pesos del scoring, bandas de clasificacion y advertencias.
+
+### Como interpretar los scores
+
+| Score | Clasificacion | Lectura |
+| --- | --- | --- |
+| 0-35 | IGNORE | No hay senal aprovechable. |
+| 35-55 | WATCH | Algun ingrediente positivo, pero no es un setup claro. |
+| 55-70 | EARLY_MOMENTUM | Movimiento empieza a despertarse, edad y liquidez razonables. |
+| 70-85 | HIGH_RISK_PUMP | Estructura tipica de pump en marcha. Riesgo alto. |
+| 85-100 | EXTREME_SPECULATION | Maximo riesgo: posible blow-off o manipulacion. |
+
+Sub-scores que componen el final:
+
+- `pump_momentum_score`: aceleracion 5m/1h/6h, ratio buys/sells, vol acelerando.
+- `liquidity_quality_score`: liquidez suficiente y ratio vol/liq saludable.
+- `transaction_quality_score`: numero de txns y dominio de buys.
+- `early_trend_score`: 24h aun no parabolico, 1h despertando, vol creciendo.
+- `prior_pump_penalty`: penaliza si 24h/6h ya son extremos o si hay historial.
+- `rug_risk_score`: penaliza pares muy nuevos, liquidez ridicula, FDV inflado.
+
+Formula (configurable en YAML, valores por defecto):
+
+```
+final = 0.30*momentum + 0.20*liquidity + 0.20*transactions + 0.20*early_trend
+      − 0.25*rug_risk − 0.15*prior_pump_penalty
+```
+
+Reescalada y recortada a 0-100.
+
+### Como revisar el historico de un token
+
+1. Ejecuta el scanner periodicamente (UI o CLI) para acumular snapshots.
+2. En la pagina, pestana "Analisis manual" introduce simbolo, address, pair
+   address o URL de DexScreener.
+3. La pestana "Histórico persistido" permite reconstruir un par usando solo
+   `chain` + `pair_address`, sin volver a llamar a DexScreener.
+4. Si hay snapshots suficientes veras graficas de precio, liquidez, volumen,
+   buys/sells y scores, con lineas verticales marcando cuando habria saltado
+   cada clasificacion. La tarjeta de replay indica `max_up_pct` posterior,
+   drawdown desde el maximo y un timing heuristico (`EARLY` / `MID` / `LATE`).
+
+### Limitaciones
+
+- La calidad del replay depende COMPLETAMENTE de la frecuencia con la que se
+  haya ejecutado el scanner; un solo snapshot no permite valorar nada.
+- DexScreener tiene rate limits: el provider degrada silenciosamente y registra
+  warning, no rompe la app.
+- No hay deteccion de honeypots ni analisis on-chain todavia.
+- Los pesos del scoring son heuristicas iniciales; convendra calibrarlos con
+  datos reales antes de tomar decisiones serias.
+- Tokens / pares duplicados se deduplican por `chain:pair_address`, pero el
+  mismo token puede aparecer en varios pares.
+- Las clasificaciones se llaman `WATCH`, `EARLY_MOMENTUM`, etc.; estos labels
+  son INTERNOS del modulo radar y no se mezclan con `RecommendationStatus` del
+  pipeline principal (viven en otra tabla, otra service y otra pagina).
+
+### Tablas creadas
+
+- `crypto_pump_snapshots`: snapshot de cada par puntuado (con scores, metricas
+  y `payload_json` con el breakdown completo).
+- `crypto_pump_scan_runs`: metadatos de cada scan (chains, top, errores).
+
+Ambas son independientes del resto del esquema y se inicializan automaticamente
+al arrancar la app via `init_db()`.
+
+### Telegram, alertas y cartera
+
+Este modulo NO envia mensajes a Telegram, NO crea alertas en la tabla `alerts`
+ni interfiere con el job diario. Esto es intencional en esta fase: el modulo es
+exploratorio y conviene verlo en la UI antes de integrarlo en flujos
+automatizados.
+
 ## Tests y lint
 
 ```bash
