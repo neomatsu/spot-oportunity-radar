@@ -19,6 +19,9 @@ yfinance_backfill_asset_types:
 yfinance_request_pause_seconds: 0.5
 allow_provider_mixing: true
 recent_provider_mix_window_days: 90
+provider_symbol_aliases:
+  yfinance:
+    SPY4.DE: SPY4.F
 providers_priority:
   stock:
     - fmp

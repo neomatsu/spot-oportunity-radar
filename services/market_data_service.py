@@ -65,7 +65,8 @@ class MarketDataService:
             "bybit": BybitProvider(),
             "fmp": FinancialModelingPrepProvider(),
             "yfinance": YFinanceProvider(
-                default_period=self.data_config.yfinance_normal_history_period
+                default_period=self.data_config.yfinance_normal_history_period,
+                symbol_aliases=self.data_config.provider_symbol_aliases.get("yfinance", {}),
             ),
             "alphavantage": AlphaVantageProvider(),
         }
@@ -129,7 +130,10 @@ class MarketDataService:
                 api_called=False,
             )
 
-        provider_candidates = self._provider_candidates(asset, pinned_provider=status.primary_provider)
+        provider_candidates = self._provider_candidates(
+            asset,
+            pinned_provider=status.primary_provider,
+        )
         if not provider_candidates:
             return self._handle_no_provider(
                 asset=asset,
@@ -170,6 +174,7 @@ class MarketDataService:
                         frame,
                         provider_name=provider.name,
                         is_adjusted=False,
+                        quote_currency=asset.quote_currency,
                     )
                     inserted_rows = len(frame)
                     next_mode = DataMode.REAL.value
@@ -179,6 +184,7 @@ class MarketDataService:
                         frame,
                         provider_name=provider.name,
                         is_adjusted=False,
+                        quote_currency=asset.quote_currency,
                     )
                     next_mode = self._merge_data_mode(data_mode, DataMode.REAL.value)
                 backfill_rows = self._maybe_backfill_long_history(
@@ -525,6 +531,7 @@ class MarketDataService:
             frame,
             provider_name=self.demo_provider.name,
             is_adjusted=False,
+            quote_currency=asset.quote_currency,
         )
         latest_date = self.prices_repo.latest_date(asset.id)
         earliest_date = self.prices_repo.earliest_date(asset.id)
@@ -639,6 +646,7 @@ class MarketDataService:
             backfill_frame,
             provider_name="yfinance",
             is_adjusted=False,
+            quote_currency=asset.quote_currency,
         )
         if inserted_rows:
             current_primary_provider = (

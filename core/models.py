@@ -26,6 +26,8 @@ class AssetConfigModel(BaseModel):
     region: str
     enabled: bool = True
     supports_fundamentals: bool = False
+    quote_currency: str | None = None
+    external_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class AppAssetList(BaseModel):
@@ -145,6 +147,7 @@ class DataSourcesConfigModel(BaseModel):
     yfinance_request_pause_seconds: float = 0.5
     allow_provider_mixing: bool = True
     recent_provider_mix_window_days: int = 90
+    provider_symbol_aliases: dict[str, dict[str, str]] = Field(default_factory=dict)
     providers_priority: dict[str, list[str]] = Field(
         default_factory=lambda: {
             "stock": ["fmp", "yfinance", "alphavantage"],

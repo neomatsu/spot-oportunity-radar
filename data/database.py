@@ -48,6 +48,7 @@ class AssetORM(Base):
     region: Mapped[str] = mapped_column(String(50))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     supports_fundamentals: Mapped[bool] = mapped_column(Boolean, default=False)
+    quote_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     prices: Mapped[list[PriceBarDailyORM]] = relationship(back_populates="asset")
     technical_snapshots: Mapped[list[TechnicalSnapshotORM]] = relationship(
@@ -57,6 +58,12 @@ class AssetORM(Base):
         back_populates="asset"
     )
     positions: Mapped[list[PortfolioPositionORM]] = relationship(back_populates="asset")
+    portfolio_transactions: Mapped[list[PortfolioTransactionORM]] = relationship(
+        back_populates="asset"
+    )
+    external_asset_mappings: Mapped[list[ExternalAssetMappingORM]] = relationship(
+        back_populates="asset"
+    )
     signals: Mapped[list[SignalORM]] = relationship(back_populates="asset")
     market_regime_history: Mapped[list[MarketRegimeHistoryORM]] = relationship(
         back_populates="asset"
@@ -85,6 +92,7 @@ class PriceBarDailyORM(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[float] = mapped_column(Float)
     provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    quote_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     is_adjusted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     inserted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -143,6 +151,60 @@ class PortfolioPositionORM(Base):
     target_weight: Mapped[float] = mapped_column(Float, default=0.0)
 
     asset: Mapped[AssetORM] = relationship(back_populates="positions")
+
+
+class PortfolioTransactionORM(Base):
+    __tablename__ = "portfolio_transactions"
+    __table_args__ = (
+        UniqueConstraint(
+            "external_source",
+            "external_transaction_id",
+            name="uq_portfolio_transaction_external_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    transaction_type: Mapped[str] = mapped_column(String(10), index=True)
+    transaction_date: Mapped[date] = mapped_column(Date, index=True)
+    quantity: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    gross_amount: Mapped[float] = mapped_column(Float)
+    fees: Mapped[float] = mapped_column(Float, default=0.0)
+    taxes: Mapped[float] = mapped_column(Float, default=0.0)
+    transaction_currency: Mapped[str] = mapped_column(String(10), default="EUR")
+    price_source: Mapped[str] = mapped_column(String(40), default="manual")
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    external_source: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    external_transaction_id: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, index=True
+    )
+    external_payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+    asset: Mapped[AssetORM] = relationship(back_populates="portfolio_transactions")
+
+
+class ExternalAssetMappingORM(Base):
+    __tablename__ = "external_asset_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "external_source",
+            "external_asset_id",
+            name="uq_external_asset_mapping_source_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    external_source: Mapped[str] = mapped_column(String(40), index=True)
+    external_asset_id: Mapped[str] = mapped_column(String(200), index=True)
+    external_symbol: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    external_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+    asset: Mapped[AssetORM] = relationship(back_populates="external_asset_mappings")
 
 
 class SignalORM(Base):
@@ -211,11 +273,50 @@ class MarketRegimeHistoryORM(Base):
     asset: Mapped[AssetORM] = relationship(back_populates="market_regime_history")
 
 
+class BitcoinOpportunityHistoryORM(Base):
+    __tablename__ = "bitcoin_opportunity_history"
+    __table_args__ = (
+        UniqueConstraint("date", "source_version", name="uq_bitcoin_opportunity_date_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    classification: Mapped[str] = mapped_column(String(30), index=True)
+    available_components: Mapped[int] = mapped_column(default=0)
+    bitcoin_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    components_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    source_version: Mapped[str] = mapped_column(String(80), index=True)
+
+
 class AppConfigORM(Base):
     __tablename__ = "app_config"
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class FxRateDailyORM(Base):
+    __tablename__ = "fx_rates_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_currency",
+            "target_currency",
+            "date",
+            name="uq_fx_rate_currency_date",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_currency: Mapped[str] = mapped_column(String(10), index=True)
+    target_currency: Mapped[str] = mapped_column(String(10), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    rate: Mapped[float] = mapped_column(Float)
+    provider: Mapped[str] = mapped_column(String(40), default="yfinance")
+    inserted_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
 
 
 class AssetDataStatusORM(Base):
@@ -601,6 +702,17 @@ def ensure_schema_migrations() -> None:
                 connection.execute(
                     text("ALTER TABLE price_bars_daily ADD COLUMN inserted_at DATETIME")
                 )
+            if "quote_currency" not in price_columns:
+                connection.execute(
+                    text("ALTER TABLE price_bars_daily ADD COLUMN quote_currency VARCHAR(10)")
+                )
+
+        if "assets" in table_names:
+            asset_columns = {column["name"] for column in inspector.get_columns("assets")}
+            if "quote_currency" not in asset_columns:
+                connection.execute(
+                    text("ALTER TABLE assets ADD COLUMN quote_currency VARCHAR(10)")
+                )
 
         if "asset_data_status" in table_names:
             status_columns = {
@@ -633,8 +745,68 @@ def ensure_schema_migrations() -> None:
                     )
                 )
 
+        if "portfolio_transactions" in table_names:
+            transaction_columns = {
+                column["name"] for column in inspector.get_columns("portfolio_transactions")
+            }
+            if "price_source" not in transaction_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE portfolio_transactions "
+                        "ADD COLUMN price_source VARCHAR(40) DEFAULT 'manual'"
+                    )
+                )
+            if "notes" not in transaction_columns:
+                connection.execute(
+                    text("ALTER TABLE portfolio_transactions ADD COLUMN notes VARCHAR(500)")
+                )
+            if "created_at" not in transaction_columns:
+                connection.execute(
+                    text("ALTER TABLE portfolio_transactions ADD COLUMN created_at DATETIME")
+                )
+            if "taxes" not in transaction_columns:
+                connection.execute(
+                    text("ALTER TABLE portfolio_transactions ADD COLUMN taxes FLOAT DEFAULT 0")
+                )
+            if "transaction_currency" not in transaction_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE portfolio_transactions "
+                        "ADD COLUMN transaction_currency VARCHAR(10) DEFAULT 'EUR'"
+                    )
+                )
+            if "external_source" not in transaction_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE portfolio_transactions "
+                        "ADD COLUMN external_source VARCHAR(40)"
+                    )
+                )
+            if "external_transaction_id" not in transaction_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE portfolio_transactions "
+                        "ADD COLUMN external_transaction_id VARCHAR(200)"
+                    )
+                )
+            if "external_payload_json" not in transaction_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE portfolio_transactions "
+                        "ADD COLUMN external_payload_json JSON"
+                    )
+                )
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_portfolio_transaction_external_id "
+                    "ON portfolio_transactions(external_source, external_transaction_id)"
+                )
+            )
+
 
 def seed_assets() -> None:
+    from core.currency import infer_quote_currency
     from data.repositories.assets_repo import AssetsRepository
 
     assets_config = load_assets_config()
@@ -650,12 +822,24 @@ def seed_assets() -> None:
                 region=asset.region,
                 enabled=asset.enabled,
                 supports_fundamentals=asset.supports_fundamentals,
+                quote_currency=infer_quote_currency(asset.symbol, asset.quote_currency),
             )
         # Deshabilitar activos en DB que ya no están en el YAML
         for db_asset in repo.list_all():
+            if not db_asset.quote_currency:
+                db_asset.quote_currency = infer_quote_currency(db_asset.symbol)
             if db_asset.symbol not in yaml_symbols and db_asset.enabled:
                 db_asset.enabled = False
-                session.flush()
+        session.flush()
+        session.execute(
+            text(
+                "UPDATE price_bars_daily "
+                "SET quote_currency = ("
+                "SELECT assets.quote_currency FROM assets "
+                "WHERE assets.id = price_bars_daily.asset_id"
+                ") WHERE quote_currency IS NULL"
+            )
+        )
 
 
 def main() -> None:

@@ -26,11 +26,13 @@ class YFinanceProvider(MarketDataProvider):
         timeout: float = 30.0,
         retries: int = 2,
         backoff_seconds: float = 1.0,
+        symbol_aliases: dict[str, str] | None = None,
     ) -> None:
         self.default_period = default_period
         self.timeout = timeout
         self.retries = retries
         self.backoff_seconds = backoff_seconds
+        self.symbol_aliases = symbol_aliases or {}
 
     def supports(self, asset: AssetORM) -> bool:
         return asset.asset_type in {"stock", "etf"}
@@ -130,7 +132,8 @@ class YFinanceProvider(MarketDataProvider):
 
     def _symbol_candidates(self, asset: AssetORM) -> list[str]:
         symbol = asset.symbol
-        candidates: list[str] = [symbol]
+        configured_alias = self.symbol_aliases.get(symbol)
+        candidates: list[str] = [configured_alias, symbol] if configured_alias else [symbol]
 
         for source_suffix, yahoo_suffix in self.SUFFIX_ALIASES.items():
             if symbol.endswith(source_suffix):

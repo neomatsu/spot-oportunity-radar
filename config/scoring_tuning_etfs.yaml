@@ -5,12 +5,11 @@ reference_universes:
       - QQQ
       - SXR8.DE
       - VWCE.DE
-      - VWRL.LON
       - EXSA.DE
       - EIMI.LON
       - SOXX
       - IWM
-      - IJH
+      - SPY4.DE
     start_date: 2024-08-19
     end_date: 2026-03-27
     candidate_config_id: cfg_02
@@ -19,7 +18,7 @@ reference_universes:
   etfs_defensive_bonds:
     symbols:
       - IB28
-      - TLT
+      - IS04.DE
       - SHY
       - BIL
       - FLOT

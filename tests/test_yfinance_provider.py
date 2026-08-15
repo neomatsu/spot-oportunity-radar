@@ -100,6 +100,32 @@ def test_yfinance_provider_tries_yahoo_london_alias_after_lon_suffix() -> None:
     assert mock_module.Ticker.call_args_list[1].args[0] == "EIMI.L"
 
 
+def test_yfinance_provider_prioritizes_configured_symbol_alias() -> None:
+    provider = YFinanceProvider(
+        default_period="1y",
+        symbol_aliases={"SPY4.DE": "SPY4.F"},
+    )
+    asset = make_asset("SPY4.DE")
+    history = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2026-08-14"]),
+            "Open": [105.0],
+            "High": [106.0],
+            "Low": [104.5],
+            "Close": [105.4],
+            "Volume": [500],
+        }
+    )
+    mock_module = Mock()
+    mock_module.Ticker.return_value.history.return_value = history
+
+    with patch.object(provider, "_get_yfinance_module", return_value=mock_module):
+        frame = provider.fetch_daily_prices(asset)
+
+    assert len(frame) == 1
+    assert mock_module.Ticker.call_args_list[0].args[0] == "SPY4.F"
+
+
 def test_yfinance_provider_tries_eu_etf_suffix_candidates_for_bare_symbol() -> None:
     provider = YFinanceProvider(default_period="1y")
     asset = AssetORM(

@@ -20,6 +20,7 @@ class PricesRepository:
         *,
         provider_name: str | None = None,
         is_adjusted: bool | None = None,
+        quote_currency: str | None = None,
     ) -> int:
         if frame.empty:
             return 0
@@ -49,6 +50,7 @@ class PricesRepository:
                         close=float(row.close),
                         volume=float(row.volume),
                         provider=provider_name,
+                        quote_currency=quote_currency,
                         is_adjusted=is_adjusted,
                         inserted_at=datetime.now(UTC).replace(tzinfo=None),
                     )
@@ -62,6 +64,7 @@ class PricesRepository:
             existing.close = float(row.close)
             existing.volume = float(row.volume)
             existing.provider = provider_name or existing.provider
+            existing.quote_currency = quote_currency or existing.quote_currency
             existing.is_adjusted = is_adjusted if is_adjusted is not None else existing.is_adjusted
             existing.inserted_at = datetime.now(UTC).replace(tzinfo=None)
 
@@ -75,6 +78,7 @@ class PricesRepository:
         *,
         provider_name: str | None = None,
         is_adjusted: bool | None = None,
+        quote_currency: str | None = None,
     ) -> None:
         self.session.execute(delete(PriceBarDailyORM).where(PriceBarDailyORM.asset_id == asset_id))
         records = []
@@ -89,6 +93,7 @@ class PricesRepository:
                     close=float(row.close),
                     volume=float(row.volume),
                     provider=provider_name,
+                    quote_currency=quote_currency,
                     is_adjusted=is_adjusted,
                     inserted_at=datetime.now(UTC).replace(tzinfo=None),
                 )
@@ -112,6 +117,7 @@ class PricesRepository:
                     "close": row.close,
                     "volume": row.volume,
                     "provider": row.provider,
+                    "quote_currency": row.quote_currency,
                     "is_adjusted": row.is_adjusted,
                     "inserted_at": row.inserted_at,
                 }

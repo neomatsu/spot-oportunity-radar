@@ -1,0 +1,22 @@
+constituents:
+  source_url: "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
+  cache_file: "cache/sp500_scoring/constituents.csv"
+
+market_data:
+  provider: "yfinance"
+  period: "5y"
+  interval: "1d"
+  batch_size: 50
+  retries: 2
+  retry_backoff_seconds: 3
+  cache_dir: "cache/sp500_scoring/prices"
+  cache_max_age_hours: 18
+  min_history_rows: 220
+
+scoring:
+  portfolio_context: "neutral"
+  include_market_regime: true
+
+output:
+  directory: "outputs/screeners"
+  filename_prefix: "sp500_scoring"

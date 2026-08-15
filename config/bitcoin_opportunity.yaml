@@ -1,0 +1,84 @@
+bitcoin_symbol: BTCUSDT
+minimum_available_components: 4
+
+weights:
+  fear_greed: 0.20
+  rsi_daily: 0.20
+  ema200: 0.20
+  liquidity: 0.15
+  dxy: 0.15
+  public_interest: 0.10
+
+classification:
+  exceptional_min: 80
+  good_min: 65
+  neutral_min: 45
+  caution_min: 30
+
+fear_greed:
+  url: "https://api.alternative.me/fng/?limit=8&format=json"
+  history_url: "https://api.alternative.me/fng/?limit=0&format=json"
+  opportunity_center: 70
+  points_per_score: 6
+
+rsi_daily:
+  opportunity_center: 70
+  points_per_score: 4
+
+ema200:
+  thresholds:
+    - max_distance_pct: -25
+      score: 10
+    - max_distance_pct: -10
+      score: 8
+    - max_distance_pct: 0
+      score: 5
+    - max_distance_pct: 10
+      score: 2
+    - max_distance_pct: 20
+      score: 1
+    - max_distance_pct: 1000000
+      score: 0
+
+liquidity:
+  recent_days: 7
+  baseline_days: 30
+  neutral_score: 5
+  score_sensitivity: 0.10
+
+dxy:
+  yahoo_symbol: "DX-Y.NYB"
+  period: 6mo
+  lookback_sessions: 20
+  neutral_score: 5
+  score_per_pct_decline: 2.5
+
+public_interest:
+  url_template: >-
+    https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/
+    en.wikipedia.org/all-access/user/Bitcoin/daily/{start}/{end}
+  history_days: 365
+  recent_days: 7
+  user_agent: "SpotOpportunityRadar/1.0 (https://github.com/neomatsu/spot-oportunity-radar)"
+
+http:
+  timeout_seconds: 15
+
+history:
+  default_years: 2
+  max_years: 5
+  public_interest_chunk_days: 365
+  source_version: bitcoin_opportunity_v1
+
+backtesting:
+  initial_capital: 100000
+  buy_thresholds: [70, 75, 80]
+  buy_capital_pcts: [0.10, 0.15, 0.25]
+  sell_thresholds: [20, 25, 30]
+  sell_position_pcts: [0.50, 0.30, 0.20]
+  buy_reset_threshold: 60
+  sell_reset_threshold: 40
+  commission_bps: 8
+  slippage_bps: 5
+  minimum_trade_value: 50
+  optimization_pct_candidates: [0.10, 0.20, 0.30, 0.40]

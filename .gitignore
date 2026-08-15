@@ -8,3 +8,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 spot_opportunity_radar.db
+cache/sp500_scoring/
+outputs/screeners/sp500_scoring_*.xlsx
+.claude/

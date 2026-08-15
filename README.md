@@ -423,6 +423,41 @@ El tamano sugerido de posicion depende de:
   portfolio realista y un modo RSI-only, con reglas de salida, segmentacion,
   persistencia y grid search de parametros
 
+### Importacion de operaciones de broker
+
+La pagina `Portfolio` permite importar CSV de Trade Republic desde el desplegable
+`Importar operaciones de Trade Republic`. Solo procesa filas con `category=TRADING`
+y `type=BUY|SELL`; el resto de movimientos de caja se ignora.
+
+El campo `symbol` del fichero se interpreta como ISIN. Primero se intenta resolver
+contra los identificadores declarados en `config/assets.yaml`, despues contra los
+mapeos guardados en `external_asset_mappings`, y finalmente se ofrece un selector
+manual. Los activos que queden sin mapear se omiten sin crear nuevos activos.
+
+Cada movimiento conserva `external_source`, `external_transaction_id`, impuestos y
+payload original. La restriccion unica `external_source + external_transaction_id`
+impide importar dos veces la misma operacion y permite reutilizar el modelo para
+otros brokers mediante parsers adicionales.
+
+### Divisas y valoracion de cartera
+
+La moneda base del portfolio es EUR. Las operaciones importadas de Trade Republic
+conservan su `transaction_currency` y su coste historico en EUR, mientras que las
+cotizaciones mantienen su moneda nativa (`quote_currency`) tanto por activo como por
+barra diaria.
+
+Para calcular valor actual, pesos y P&L, el portfolio convierte el ultimo precio a
+EUR. Los cambios diarios se obtienen de Yahoo Finance y se guardan en
+`fx_rates_daily`, por lo que la UI usa primero SQLite y no consulta la red en cada
+render. La tabla muestra precio nativo, divisa, cambio aplicado, precio EUR y valor
+EUR para que la conversion sea auditable. Las cotizaciones en peniques britanicos
+usan `GBX`: primero se dividen entre 100 y despues se convierten de GBP a EUR.
+
+Si falta un tipo de cambio, el valor no se inventa y la posicion queda marcada para
+revision. Tambien se avisa cuando la relacion entre coste y cotizacion es extrema,
+algo que normalmente indica que un ISIN europeo se ha mapeado manualmente a un ETF
+estadounidense distinto. La conversion de moneda no corrige esos mapeos de activos.
+
 ## Market Regime Detector
 
 La app incluye un modulo observacional de regimen de mercado. No modifica el scoring,
@@ -1134,6 +1169,68 @@ Este modulo NO envia mensajes a Telegram, NO crea alertas en la tabla `alerts`
 ni interfiere con el job diario. Esto es intencional en esta fase: el modulo es
 exploratorio y conviene verlo en la UI antes de integrarlo en flujos
 automatizados.
+
+## Scoring independiente del S&P 500
+
+El job externo del S&P 500 descarga una instantanea actual de sus componentes,
+obtiene historico diario por lotes con yfinance y reutiliza los servicios actuales
+de indicadores, soportes, riesgo, scoring, recommendation y market regime. No
+inserta esos simbolos en `assets`, no genera alertas y no altera el job diario.
+
+```bash
+python -m jobs.run_sp500_scoring
+```
+
+Opciones utiles:
+
+```bash
+python -m jobs.run_sp500_scoring --limit 10
+python -m jobs.run_sp500_scoring --force --refresh-constituents
+python -m jobs.run_sp500_scoring --period 2y --batch-size 25
+python -m jobs.run_sp500_scoring --output outputs/screeners/custom.xlsx
+```
+
+La salida por defecto es `outputs/screeners/sp500_scoring_YYYY-MM-DD.xlsx`, con
+hojas `Ranking`, `Errors` y `Metadata`. El score usa contexto de cartera neutral:
+por tanto, `portfolio_fit_score` y la recommendation son comparables entre
+empresas, pero no representan el encaje con la cartera real del usuario.
+
+El cache independiente vive en `cache/sp500_scoring`. Los parametros de fuente,
+periodo, lotes, antiguedad del cache y salida se configuran en
+`config/sp500_scoring.yaml`. Yahoo puede devolver simbolos ausentes o errores
+parciales; estos quedan registrados en `Errors` y el resto del estudio continua.
+
+## Bitcoin Opportunity Detector
+
+La pagina `Bitcoin Opportunity Detector` ofrece un score contrarian independiente
+de 0 a 100 basado en Fear & Greed, RSI diario, distancia a EMA200, volumen como
+proxy de liquidez, tendencia del DXY e interes publico mediante Wikimedia
+Pageviews. No modifica el scoring general, recommendations, alertas ni jobs.
+
+Los pesos, umbrales y fuentes se configuran en
+`config/bitcoin_opportunity.yaml`. El bloque historico compara el score diario con
+el precio de Bitcoin y se genera bajo demanda desde la propia pagina. Los puntos se
+persisten en `bitcoin_opportunity_history`; cambiar el rango o volver a abrir la
+pagina lee SQLite y solo se consultan proveedores para fechas todavia ausentes.
+Cada observacion se calcula sin look-ahead, usando exclusivamente datos disponibles
+hasta esa fecha.
+
+El indicador actual mantiene una cache Streamlit de una hora y los componentes no
+disponibles se excluyen del calculo. Con menos de cuatro componentes el resultado
+se marca como datos insuficientes. El historico se versiona mediante
+`history.source_version`, lo que permite invalidarlo de forma controlada si cambia
+la formula.
+
+La misma pagina incluye un backtest long-only por umbrales del indicador. Cada nivel
+de compra utiliza un porcentaje configurable del capital inicial y cada nivel de
+venta reduce un porcentaje configurable de la posicion disponible. Las senales se
+ejecutan con el precio del dia siguiente, incluyendo comision y slippage, y cada
+umbral solo puede ejecutarse una vez hasta que el ciclo se rearma. El optimizador
+prueba perfiles porcentuales monotonicos y los ordena por retorno penalizado por
+drawdown; no modifica el scoring ni genera ordenes reales.
+
+Liquidez e interes publico son proxies explicables, no medidas institucionales
+directas, y el indicador no pretende predecir suelos de mercado.
 
 ## Tests y lint
 

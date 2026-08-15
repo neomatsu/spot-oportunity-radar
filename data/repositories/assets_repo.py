@@ -20,6 +20,7 @@ class AssetsRepository:
         region: str,
         enabled: bool,
         supports_fundamentals: bool,
+        quote_currency: str | None = None,
     ) -> AssetORM:
         asset = self.get_by_symbol(symbol)
         if asset is None:
@@ -31,6 +32,7 @@ class AssetsRepository:
                 region=region,
                 enabled=enabled,
                 supports_fundamentals=supports_fundamentals,
+                quote_currency=quote_currency,
             )
             self.session.add(asset)
             self.session.flush()
@@ -42,6 +44,7 @@ class AssetsRepository:
         asset.region = region
         asset.enabled = enabled
         asset.supports_fundamentals = supports_fundamentals
+        asset.quote_currency = quote_currency or asset.quote_currency
         self.session.flush()
         return asset
 
