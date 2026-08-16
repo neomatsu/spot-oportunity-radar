@@ -223,3 +223,48 @@ def test_history_is_persisted_and_reused_without_external_calls(db_session) -> N
 
     assert len(cached) == len(first)
     assert cached["overall_score"].tolist() == first["overall_score"].tolist()
+
+
+def test_history_backfills_missing_prefix_once(db_session) -> None:
+    _seed_prices(db_session)
+    calls: list[tuple[date, date]] = []
+
+    def bitcoin_history_loader(asset, start: date, end: date) -> pd.DataFrame:
+        calls.append((start, end))
+        dates = pd.date_range(start, end, freq="D")
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "open": 50_000.0,
+                "high": 51_000.0,
+                "low": 49_000.0,
+                "close": 50_500.0,
+                "volume": 1_000.0,
+            }
+        )
+
+    config = _config() | {
+        "history": {
+            "enable_price_backfill": True,
+            "price_source_start": "2017-08-17",
+            "price_warmup_days": 220,
+        }
+    }
+    service = BitcoinOpportunityService(
+        db_session,
+        config=config,
+        bitcoin_history_loader=bitcoin_history_loader,
+    )
+
+    inserted = service._ensure_bitcoin_price_history(
+        date(2018, 1, 1), date(2025, 11, 15)
+    )
+    inserted_again = service._ensure_bitcoin_price_history(
+        date(2018, 1, 1), date(2025, 11, 15)
+    )
+
+    assert inserted > 0
+    assert inserted_again == 0
+    assert calls == [(date(2017, 8, 17), date(2024, 12, 31))]
+    asset = AssetsRepository(db_session).get_by_symbol("BTCUSDT")
+    assert PricesRepository(db_session).earliest_date(asset.id) == date(2017, 8, 17)

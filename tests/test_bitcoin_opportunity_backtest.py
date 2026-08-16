@@ -72,6 +72,27 @@ def test_optimizer_uses_monotonic_percentage_profiles() -> None:
     assert (results["sell_2_pct"] >= results["sell_3_pct"]).all()
 
 
+def test_threshold_optimizer_evaluates_distinct_triplets() -> None:
+    base = BitcoinOpportunityBacktestConfig(
+        buy_capital_pcts=(0.10, 0.20, 0.40),
+        sell_position_pcts=(0.10, 0.10, 0.10),
+        commission_bps=0,
+        slippage_bps=0,
+    )
+    results = BitcoinOpportunityBacktester().optimize_thresholds(
+        _history(),
+        base,
+        buy_candidates=[65, 70, 75, 80],
+        sell_candidates=[15, 20, 25, 30],
+    )
+
+    assert len(results) == 16
+    assert (results["buy_threshold_1"] < results["buy_threshold_2"]).all()
+    assert (results["buy_threshold_2"] < results["buy_threshold_3"]).all()
+    assert (results["sell_threshold_1"] < results["sell_threshold_2"]).all()
+    assert (results["sell_threshold_2"] < results["sell_threshold_3"]).all()
+
+
 def test_threshold_does_not_repeat_until_cycle_is_rearmed() -> None:
     history = pd.DataFrame(
         {

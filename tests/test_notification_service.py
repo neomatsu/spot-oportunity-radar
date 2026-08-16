@@ -47,6 +47,25 @@ def test_build_telegram_message_contains_key_fields() -> None:
     assert "Buy zone: [410.0, 425.0]" in message
 
 
+def test_bitcoin_opportunity_message_contains_threshold_and_percentage() -> None:
+    alert = _build_alert()
+    alert.symbol = "BTCUSDT"
+    alert.alert_type = "bitcoin_opportunity_buy"
+    alert.payload_json = {
+        "opportunity_score": 82.4,
+        "crossed_thresholds": [70, 75, 80],
+        "recommended_trade_pct": 90.0,
+        "recommended_trade_basis": "capital base",
+        "action_suggestion": "Comprar 90% del capital base",
+    }
+
+    message = NotificationService().build_telegram_message(alert)
+
+    assert "Bitcoin Opportunity: 82.40/100" in message
+    assert "Umbrales cruzados: 70/75/80" in message
+    assert "Porcentaje sugerido: 90% del capital base" in message
+
+
 def test_telegram_failure_does_not_break_pipeline(monkeypatch) -> None:
     service = NotificationService()
     service.config["channels"]["telegram"] = True

@@ -9,6 +9,7 @@ from core.config import get_settings, load_yaml_config
 from core.logger import get_logger
 from data.repositories.job_runs_repo import JobRunsRepository
 from services.alert_service import AlertService
+from services.bitcoin_opportunity_service import BitcoinOpportunityService
 from services.recommendation_facade import RecommendationFacade
 
 logger = get_logger(__name__)
@@ -104,6 +105,19 @@ class DailyMarketRunService:
                     )
 
             if not options.only_refresh:
+                if self.config.get("runner", {}).get(
+                    "update_bitcoin_opportunity_history", False
+                ):
+                    try:
+                        logger.info("Actualizando indicador Bitcoin Opportunity")
+                        BitcoinOpportunityService(self.session).update_latest_history()
+                    except Exception as exc:
+                        logger.warning(
+                            "No se pudo actualizar Bitcoin Opportunity: %s", exc
+                        )
+                        summary.warnings.append(
+                            f"Bitcoin Opportunity no actualizado: {exc}"
+                        )
                 logger.info("Iniciando deteccion de eventos y alertas")
                 alert_summary = self.alert_service.scan_market_events()
                 summary.events_detected = alert_summary.events_detected

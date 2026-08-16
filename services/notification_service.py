@@ -89,6 +89,12 @@ class NotificationService:
             "sell_rsi_75": telegram_cfg.get("send_rsi_cycle_alerts", False),
             "sell_rsi_80": telegram_cfg.get("send_rsi_cycle_alerts", False),
             "sell_bearish_divergence": telegram_cfg.get("send_rsi_cycle_alerts", False),
+            "bitcoin_opportunity_buy": telegram_cfg.get(
+                "send_bitcoin_opportunity_alerts", False
+            ),
+            "bitcoin_opportunity_sell": telegram_cfg.get(
+                "send_bitcoin_opportunity_alerts", False
+            ),
         }
         return type_flags.get(alert_type, True)
 
@@ -112,6 +118,18 @@ class NotificationService:
             lines.append(f"P/L latente: {payload['profit_pct']}%")
         if payload.get("rsi14") is not None:
             lines.append(f"RSI14: {payload['rsi14']:.2f}")
+        if payload.get("opportunity_score") is not None:
+            lines.append(f"Bitcoin Opportunity: {payload['opportunity_score']:.2f}/100")
+        if payload.get("crossed_thresholds"):
+            thresholds = "/".join(
+                f"{float(value):g}" for value in payload["crossed_thresholds"]
+            )
+            lines.append(f"Umbrales cruzados: {thresholds}")
+        if payload.get("recommended_trade_pct") is not None:
+            lines.append(
+                f"Porcentaje sugerido: {payload['recommended_trade_pct']:g}% "
+                f"del {payload.get('recommended_trade_basis', 'capital/posicion')}"
+            )
         if payload.get("current_weight_pct") is not None:
             lines.append(
                 f"Peso actual: {payload['current_weight_pct']}%"

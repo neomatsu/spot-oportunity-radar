@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import combinations_with_replacement
+from itertools import combinations, combinations_with_replacement
 
 import pandas as pd
 
@@ -230,6 +230,70 @@ class BitcoinOpportunityBacktester:
                         "sell_1_pct": sell_profile[0] * 100,
                         "sell_2_pct": sell_profile[1] * 100,
                         "sell_3_pct": sell_profile[2] * 100,
+                        "total_return_pct": result.total_return_pct,
+                        "benchmark_return_pct": result.benchmark_return_pct,
+                        "excess_return_pct": result.excess_return_pct,
+                        "max_drawdown_pct": result.max_drawdown_pct,
+                        "final_equity": result.final_equity,
+                        "buys": result.buy_count,
+                        "sells": result.sell_count,
+                        "strategy_score": result.strategy_score,
+                    }
+                )
+        return pd.DataFrame(rows).sort_values(
+            ["strategy_score", "total_return_pct"], ascending=False
+        ).reset_index(drop=True)
+
+    def optimize_thresholds(
+        self,
+        history: pd.DataFrame,
+        base_config: BitcoinOpportunityBacktestConfig,
+        *,
+        buy_candidates: list[float],
+        sell_candidates: list[float],
+    ) -> pd.DataFrame:
+        """Evaluate distinct ordered threshold triplets with fixed sizing rules."""
+        buy_values = sorted(
+            {
+                float(value)
+                for value in buy_candidates
+                if base_config.buy_reset_threshold < float(value) <= 100
+            }
+        )
+        sell_values = sorted(
+            {
+                float(value)
+                for value in sell_candidates
+                if 0 <= float(value) < base_config.sell_reset_threshold
+            }
+        )
+        if len(buy_values) < 3 or len(sell_values) < 3:
+            raise ValueError("At least three valid buy and sell thresholds are required")
+
+        rows: list[dict[str, float | int]] = []
+        for buy_thresholds in combinations(buy_values, 3):
+            for sell_thresholds in combinations(sell_values, 3):
+                config = BitcoinOpportunityBacktestConfig(
+                    initial_capital=base_config.initial_capital,
+                    buy_thresholds=buy_thresholds,
+                    buy_capital_pcts=base_config.buy_capital_pcts,
+                    sell_thresholds=sell_thresholds,
+                    sell_position_pcts=base_config.sell_position_pcts,
+                    buy_reset_threshold=base_config.buy_reset_threshold,
+                    sell_reset_threshold=base_config.sell_reset_threshold,
+                    commission_bps=base_config.commission_bps,
+                    slippage_bps=base_config.slippage_bps,
+                    minimum_trade_value=base_config.minimum_trade_value,
+                )
+                result = self.run(history, config)
+                rows.append(
+                    {
+                        "buy_threshold_1": buy_thresholds[0],
+                        "buy_threshold_2": buy_thresholds[1],
+                        "buy_threshold_3": buy_thresholds[2],
+                        "sell_threshold_1": sell_thresholds[0],
+                        "sell_threshold_2": sell_thresholds[1],
+                        "sell_threshold_3": sell_thresholds[2],
                         "total_return_pct": result.total_return_pct,
                         "benchmark_return_pct": result.benchmark_return_pct,
                         "excess_return_pct": result.excess_return_pct,

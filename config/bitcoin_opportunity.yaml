@@ -66,19 +66,30 @@ http:
 
 history:
   default_years: 2
-  max_years: 5
+  max_years: 9
+  enable_price_backfill: true
+  indicator_start_date: "2018-01-01"
+  price_source_start: "2017-08-17"
+  price_warmup_days: 220
   public_interest_chunk_days: 365
   source_version: bitcoin_opportunity_v1
 
 backtesting:
+  default_profile_label: "Mejor configuracion historica actual (2018-2026)"
   initial_capital: 100000
   buy_thresholds: [70, 75, 80]
-  buy_capital_pcts: [0.10, 0.15, 0.25]
-  sell_thresholds: [20, 25, 30]
-  sell_position_pcts: [0.50, 0.30, 0.20]
+  buy_capital_pcts: [0.10, 0.40, 0.40]
+  sell_thresholds: [15, 20, 25]
+  sell_position_pcts: [0.40, 0.10, 0.10]
   buy_reset_threshold: 60
   sell_reset_threshold: 40
   commission_bps: 8
   slippage_bps: 5
   minimum_trade_value: 50
   optimization_pct_candidates: [0.10, 0.20, 0.30, 0.40]
+  threshold_study:
+    buy_candidates: [65, 70, 75, 80, 85, 90]
+    sell_candidates: [10, 15, 20, 25, 30, 35]
+    fixed_buy_capital_pcts: [0.10, 0.40, 0.40]
+    fixed_sell_position_pcts: [0.40, 0.10, 0.10]
+    train_end_date: "2023-12-31"

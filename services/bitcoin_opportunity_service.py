@@ -11,8 +11,11 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from core.config import load_yaml_config
+from data.database import AssetORM
+from data.providers.binance_provider import BinanceProvider
 from data.repositories.assets_repo import AssetsRepository
 from data.repositories.bitcoin_opportunity_repo import BitcoinOpportunityRepository
+from data.repositories.data_status_repo import AssetDataStatusRepository
 from data.repositories.prices_repo import PricesRepository
 from services.technical_service import TechnicalService
 
@@ -74,6 +77,8 @@ class BitcoinOpportunityService:
         http_client: httpx.Client | None = None,
         dxy_loader: Callable[[], pd.DataFrame] | None = None,
         dxy_history_loader: Callable[[date, date], pd.DataFrame] | None = None,
+        bitcoin_history_loader: Callable[[AssetORM, date, date], pd.DataFrame]
+        | None = None,
         now: datetime | None = None,
     ) -> None:
         self.session = session
@@ -81,9 +86,13 @@ class BitcoinOpportunityService:
         self.http_client = http_client
         self.dxy_loader = dxy_loader or self._download_dxy
         self.dxy_history_loader = dxy_history_loader or self._download_dxy_history
+        self.bitcoin_history_loader = (
+            bitcoin_history_loader or self._download_bitcoin_history
+        )
         self.now = now or datetime.now(UTC)
         self.assets_repo = AssetsRepository(session)
         self.prices_repo = PricesRepository(session)
+        self.data_status_repo = AssetDataStatusRepository(session)
         self.history_repo = BitcoinOpportunityRepository(session)
         self.technical_service = TechnicalService()
 
@@ -107,6 +116,7 @@ class BitcoinOpportunityService:
         """Compute only uncached dates and return the complete cached range."""
         if start_date > end_date:
             raise ValueError("start_date must be before end_date")
+        self._ensure_bitcoin_price_history(start_date, end_date)
         local = self._historical_local_frame(start_date, end_date)
         if local.empty:
             return self.cached_history(start_date, end_date)
@@ -138,8 +148,13 @@ class BitcoinOpportunityService:
         fear = self._safe_history(
             self._fear_greed_history, columns=["date", "fear_greed"]
         )
+        dxy_lookback_days = max(
+            45, int(self.config.get("dxy", {}).get("lookback_sessions", 20)) * 2
+        )
         dxy = self._safe_history(
-            lambda: self._dxy_history(start_date, end_date),
+            lambda: self._dxy_history(
+                start_date - timedelta(days=dxy_lookback_days), end_date
+            ),
             columns=["date", "dxy_close"],
         )
         interest = self._safe_history(
@@ -149,6 +164,76 @@ class BitcoinOpportunityService:
         rows = self._build_historical_rows(local, fear, dxy, interest, set(missing_dates))
         self.history_repo.upsert_many(rows, source_version=self.history_source_version)
         return self.cached_history(start_date, end_date)
+
+    def update_latest_history(self, lookback_days: int = 2) -> pd.DataFrame:
+        """Refresh the latest cached score dates after the daily BTC price refresh."""
+        symbol = str(self.config.get("bitcoin_symbol", "BTCUSDT"))
+        asset = self.assets_repo.get_by_symbol(symbol)
+        if asset is None:
+            return pd.DataFrame()
+        latest_date = self.prices_repo.latest_date(asset.id)
+        if latest_date is None:
+            return pd.DataFrame()
+        start_date = latest_date - timedelta(days=max(1, lookback_days))
+        return self.update_history(start_date, latest_date)
+
+    def _ensure_bitcoin_price_history(self, start_date: date, end_date: date) -> int:
+        """Backfill only the missing prefix required by the requested score range."""
+        symbol = str(self.config.get("bitcoin_symbol", "BTCUSDT"))
+        asset = self.assets_repo.get_by_symbol(symbol)
+        if asset is None:
+            return 0
+
+        history_cfg = self.config.get("history", {})
+        if not bool(history_cfg.get("enable_price_backfill", False)):
+            return 0
+        warmup_days = int(history_cfg.get("price_warmup_days", 220))
+        configured_source_start = pd.Timestamp(
+            history_cfg.get("price_source_start", "2017-08-17")
+        ).date()
+        required_start = max(
+            configured_source_start,
+            start_date - timedelta(days=warmup_days),
+        )
+        earliest = self.prices_repo.earliest_date(asset.id)
+        if earliest is not None and earliest <= required_start:
+            return 0
+
+        fetch_end = (
+            end_date
+            if earliest is None
+            else min(end_date, earliest - timedelta(days=1))
+        )
+        if required_start > fetch_end:
+            return 0
+
+        frame = self.bitcoin_history_loader(asset, required_start, fetch_end)
+        inserted = self.prices_repo.upsert_asset_prices(
+            asset.id,
+            frame,
+            provider_name="binance",
+            is_adjusted=False,
+            quote_currency=asset.quote_currency,
+        )
+        self.data_status_repo.update_status(
+            asset.id,
+            historical_coverage_start=self.prices_repo.earliest_date(asset.id),
+            historical_coverage_end=self.prices_repo.latest_date(asset.id),
+            historical_provider_baseline="binance",
+        )
+        return inserted
+
+    @staticmethod
+    def _download_bitcoin_history(
+        asset: AssetORM,
+        start_date: date,
+        end_date: date,
+    ) -> pd.DataFrame:
+        return BinanceProvider().fetch_daily_prices_for_history(
+            asset,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     def compute(self) -> BitcoinOpportunityReport:
         frame = self._bitcoin_frame()

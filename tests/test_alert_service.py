@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from data.database import (
     AssetDataStatusORM,
@@ -11,6 +11,7 @@ from data.database import (
     TechnicalSnapshotORM,
 )
 from data.repositories.alerts_repo import AlertsRepository
+from data.repositories.bitcoin_opportunity_repo import BitcoinOpportunityRepository
 from data.repositories.trade_intents_repo import TradeIntentsRepository
 from services.alert_service import AlertService
 from services.rsi_cycle_alerts_service import RSICycleAlertSignal
@@ -404,3 +405,44 @@ def test_rsi_cycle_alerts_are_deduplicated(db_session, monkeypatch) -> None:
     assert first.alerts_created >= 1
     assert second.alerts_deduplicated >= 1
     assert len([alert for alert in alerts if alert.alert_type == "sell_rsi_80"]) == 1
+
+
+def test_bitcoin_opportunity_crossing_creates_actionable_alert(db_session) -> None:
+    _seed_actionable_asset(
+        db_session,
+        symbol="BTCUSDT",
+        recommendation="WATCH",
+        score=55,
+        risk=42,
+        last_price=65_000,
+    )
+    today = date.today()
+    BitcoinOpportunityRepository(db_session).upsert_many(
+        [
+            {
+                "date": today - timedelta(days=1),
+                "overall_score": 65.0,
+                "classification": "BUENA_OPORTUNIDAD",
+                "available_components": 6,
+                "bitcoin_price": 64_000,
+            },
+            {
+                "date": today,
+                "overall_score": 71.0,
+                "classification": "BUENA_OPORTUNIDAD",
+                "available_components": 6,
+                "bitcoin_price": 65_000,
+            },
+        ],
+        source_version="bitcoin_opportunity_v1",
+    )
+
+    summary = AlertService(db_session).scan_market_events()
+    alerts = AlertsRepository(db_session).list_recent()
+    alert = next(
+        item for item in alerts if item.alert_type == "bitcoin_opportunity_buy"
+    )
+
+    assert summary.alerts_created >= 1
+    assert alert.payload_json["crossed_thresholds"] == [70.0]
+    assert alert.payload_json["recommended_trade_pct"] == 10.0

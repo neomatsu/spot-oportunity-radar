@@ -18,6 +18,8 @@ telegram:
     - sell_rsi_75
     - sell_rsi_80
     - sell_bearish_divergence
+    - bitcoin_opportunity_buy
+    - bitcoin_opportunity_sell
   send_entry_alerts: true
   send_risk_alerts: false
   send_data_alerts: false
@@ -25,6 +27,7 @@ telegram:
   send_portfolio_alerts: false
   send_sell_alerts: false
   send_rsi_cycle_alerts: false
+  send_bitcoin_opportunity_alerts: true
 
 formatting:
   include_buy_zone: true

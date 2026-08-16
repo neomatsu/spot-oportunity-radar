@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import pandas as pd
+
 from core.config import load_yaml_config
 from core.logger import get_logger
 from data.database import AssetORM, PortfolioPositionORM
@@ -11,6 +13,8 @@ from data.repositories.assets_repo import AssetsRepository
 from data.repositories.portfolio_repo import PortfolioRepository
 from data.repositories.prices_repo import PricesRepository
 from data.repositories.signals_repo import SignalsRepository
+from services.bitcoin_opportunity_alerts_service import BitcoinOpportunityAlertsService
+from services.bitcoin_opportunity_service import BitcoinOpportunityService
 from services.notification_service import NotificationService
 from services.portfolio_service import PortfolioService
 from services.position_management_alerts_service import (
@@ -54,6 +58,8 @@ class AlertService:
         self.trade_intent_service = TradeIntentService(session)
         self.position_management_alerts_service = PositionManagementAlertsService()
         self.rsi_cycle_alerts_service = RSICycleAlertsService()
+        self.bitcoin_opportunity_alerts_service = BitcoinOpportunityAlertsService()
+        self.bitcoin_opportunity_service = BitcoinOpportunityService(session)
 
     def scan_market_events(self) -> AlertRunSummary:
         summary = AlertRunSummary()
@@ -253,7 +259,72 @@ class AlertService:
             )
         if rules.get("enable_rsi_cycle_alerts", False):
             events.extend(self._detect_rsi_cycle_events(asset=asset, row=row))
+        if (
+            rules.get("enable_bitcoin_opportunity_alerts", False)
+            and asset.symbol
+            == str(self.bitcoin_opportunity_service.config.get("bitcoin_symbol", "BTCUSDT"))
+        ):
+            events.extend(self._detect_bitcoin_opportunity_events(asset=asset, row=row))
         return events
+
+    def _detect_bitcoin_opportunity_events(
+        self,
+        *,
+        asset: AssetORM,
+        row: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        latest_price_date = self.prices_repo.latest_date(asset.id)
+        if latest_price_date is None:
+            return []
+        history_start = pd.Timestamp(
+            self.bitcoin_opportunity_service.config.get("history", {}).get(
+                "indicator_start_date", "2018-01-01"
+            )
+        ).date()
+        history = self.bitcoin_opportunity_service.cached_history(
+            history_start, latest_price_date
+        )
+        signal = self.bitcoin_opportunity_alerts_service.detect_latest_signal(history)
+        if signal is None or signal.signal_date != latest_price_date:
+            return []
+
+        thresholds_label = "/".join(f"{value:g}" for value in signal.thresholds)
+        is_buy = signal.action == "BUY"
+        action_label = "compra" if is_buy else "venta/reduccion"
+        basis_label = "capital base" if is_buy else "posicion actual"
+        return [
+            self._event_payload(
+                asset=asset,
+                event_type=signal.event_type,
+                row=row,
+                severity="high" if is_buy else "warning",
+                title=f"Bitcoin Opportunity · señal de {action_label}",
+                message=(
+                    f"El indicador global ha cruzado {thresholds_label}. "
+                    f"La estrategia sugiere aplicar {signal.recommended_pct:g}% "
+                    f"del {basis_label}."
+                ),
+                alert_group="bitcoin_opportunity",
+                material_value=signal.score,
+                position_metrics={
+                    "opportunity_score": signal.score,
+                    "crossed_thresholds": list(signal.thresholds),
+                    "recommended_trade_pct": signal.recommended_pct,
+                    "recommended_trade_basis": basis_label,
+                    "signal_date": str(signal.signal_date),
+                    "strategy_name": "bitcoin_opportunity_threshold_strategy",
+                },
+                action_suggestion=(
+                    f"Comprar {signal.recommended_pct:g}% del capital base"
+                    if is_buy
+                    else f"Vender {signal.recommended_pct:g}% de la posicion actual"
+                ),
+                dedupe_key=(
+                    f"{asset.symbol}:{signal.event_type}:{signal.signal_date}:"
+                    f"{thresholds_label}"
+                ),
+            )
+        ]
 
     def _detect_rsi_cycle_events(
         self,
@@ -394,8 +465,9 @@ class AlertService:
         material_value: float | None = None,
         position_metrics: dict[str, Any] | None = None,
         action_suggestion: str | None = None,
+        dedupe_key: str | None = None,
     ) -> dict[str, Any]:
-        dedupe_key = f"{asset.symbol}:{event_type}"
+        dedupe_key = dedupe_key or f"{asset.symbol}:{event_type}"
         return {
             "asset_id": asset.id,
             "symbol": asset.symbol,

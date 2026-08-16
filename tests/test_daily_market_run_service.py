@@ -162,3 +162,51 @@ def test_only_alerts_skips_refresh_phase() -> None:
 
     assert summary.events_detected == 2
     assert summary.generated_signals == 0
+
+
+def test_runner_updates_bitcoin_indicator_before_alert_scan(monkeypatch) -> None:
+    service = _build_service()
+    service.config["runner"]["update_bitcoin_opportunity_history"] = True
+    calls: list[str] = []
+
+    class FakeBitcoinOpportunityService:
+        def __init__(self, session) -> None:
+            pass
+
+        def update_latest_history(self):
+            calls.append("bitcoin")
+
+    monkeypatch.setattr(
+        "services.daily_market_run_service.BitcoinOpportunityService",
+        FakeBitcoinOpportunityService,
+    )
+    service.recommendation_facade.refresh_and_generate_all = lambda force: SimpleNamespace(
+        total_assets=1,
+        refreshed_assets=1,
+        cached_assets=0,
+        preserved_assets=0,
+        demo_fallback_assets=0,
+        generated_signals=1,
+        provider_error_assets=[],
+        provider_unavailable_assets=[],
+    )
+    service.alert_service.scan_market_events = lambda: (
+        calls.append("scan")
+        or SimpleNamespace(
+            events_detected=1,
+            alerts_created=1,
+            alerts_deduplicated=0,
+            trade_intents_created=0,
+            errors=[],
+        )
+    )
+    service.alert_service.send_pending_alerts = lambda: SimpleNamespace(
+        alerts_sent=1,
+        alerts_failed=0,
+        alerts_skipped=0,
+    )
+
+    summary = service.run(DailyMarketRunOptions())
+
+    assert summary.status == "success"
+    assert calls == ["bitcoin", "scan"]

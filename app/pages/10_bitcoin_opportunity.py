@@ -324,6 +324,81 @@ def _backtest_chart(result: BitcoinOpportunityBacktestResult) -> go.Figure:
     return figure
 
 
+def _backtest_trade_chart(result: BitcoinOpportunityBacktestResult) -> go.Figure:
+    frame = result.equity_curve.copy()
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=frame["date"],
+            y=frame["bitcoin_price"],
+            name="Precio BTC",
+            mode="lines",
+            line=dict(color="#64748b", width=1.8),
+            hovertemplate="%{x|%d/%m/%Y}<br>BTC: %{y:,.0f}<extra></extra>",
+        )
+    )
+    if result.events.empty:
+        return figure
+
+    events = result.events.copy()
+    events["execution_date"] = pd.to_datetime(events["execution_date"])
+    buy_colors = {70.0: "#4ade80", 75.0: "#16a34a", 80.0: "#047857"}
+    sell_colors = {25.0: "#f59e0b", 20.0: "#ef4444", 15.0: "#991b1b"}
+
+    for (action, thresholds_text), group in events.groupby(
+        ["action", "trigger_thresholds"], sort=False
+    ):
+        thresholds = tuple(
+            float(value.strip()) for value in str(thresholds_text).split(",")
+        )
+        thresholds_label = "/".join(f"{value:g}" for value in thresholds)
+        is_buy = action == "BUY"
+        extreme_threshold = max(thresholds) if is_buy else min(thresholds)
+        color = (
+            buy_colors.get(extreme_threshold, "#16a34a")
+            if is_buy
+            else sell_colors.get(extreme_threshold, "#dc2626")
+        )
+        customdata = group[
+            ["signal_date", "signal_score", "applied_pct", "gross_value", "fees"]
+        ].to_numpy()
+        figure.add_trace(
+            go.Scatter(
+                x=group["execution_date"],
+                y=group["price"],
+                name=f"{'Compra' if is_buy else 'Venta'} · {thresholds_label}",
+                mode="markers",
+                marker=dict(
+                    symbol="triangle-up" if is_buy else "triangle-down",
+                    size=14,
+                    color=color,
+                    line=dict(color="white", width=1.2),
+                ),
+                customdata=customdata,
+                hovertemplate=(
+                    f"<b>{'COMPRA' if is_buy else 'VENTA'} · {thresholds_label}</b>"
+                    "<br>Señal: %{customdata[0]}"
+                    "<br>Ejecución: %{x|%d/%m/%Y}"
+                    "<br>Score: %{customdata[1]:.2f}"
+                    "<br>Porcentaje: %{customdata[2]:.1f}%"
+                    "<br>Precio: %{y:,.2f}"
+                    "<br>Importe: %{customdata[3]:,.2f}"
+                    "<br>Costes: %{customdata[4]:,.2f}<extra></extra>"
+                ),
+            )
+        )
+
+    figure.update_layout(
+        height=500,
+        margin=dict(t=25, b=20),
+        hovermode="closest",
+        yaxis_title="Precio BTC",
+        xaxis_title=None,
+        legend=dict(orientation="h", y=1.12),
+    )
+    return figure
+
+
 st.set_page_config(page_title="Bitcoin Opportunity", layout="wide")
 st.title("Bitcoin Opportunity Detector")
 st.caption(
@@ -370,13 +445,26 @@ st.caption(
     "la línea gris discontinua muestra el precio de Bitcoin en el eje derecho."
 )
 history_controls = st.columns([1, 1, 3])
+history_config = load_yaml_config("bitcoin_opportunity.yaml").get("history", {})
 with history_controls[0]:
-    history_years = st.selectbox(
-        "Periodo", [1, 2, 3, 5], index=1, format_func=lambda x: f"{x} años"
+    history_period = st.selectbox(
+        "Periodo",
+        [1, 2, 3, 5, "since_2018"],
+        index=1,
+        format_func=lambda value: (
+            "Desde 2018" if value == "since_2018" else f"{value} años"
+        ),
     )
 
 history_end = report.bitcoin_price_date or date.today()
-history_start = (pd.Timestamp(history_end) - pd.DateOffset(years=history_years)).date()
+if history_period == "since_2018":
+    history_start = pd.Timestamp(
+        history_config.get("indicator_start_date", "2018-01-01")
+    ).date()
+else:
+    history_start = (
+        pd.Timestamp(history_end) - pd.DateOffset(years=int(history_period))
+    ).date()
 with history_controls[1]:
     st.write("")
     refresh_history = st.button("Generar / actualizar histórico", width="stretch")
@@ -403,6 +491,8 @@ else:
     last_computed = pd.to_datetime(history_frame["computed_at"]).max()
     st.caption(
         f"{valid_scores} días con score | Caché: SQLite | "
+        f"Cobertura: {pd.to_datetime(history_frame['date']).min().strftime('%d/%m/%Y')} - "
+        f"{pd.to_datetime(history_frame['date']).max().strftime('%d/%m/%Y')} | "
         f"Último cálculo {last_computed.strftime('%d/%m/%Y %H:%M')} | "
         "Cada punto usa únicamente información disponible hasta esa fecha."
     )
@@ -414,6 +504,11 @@ with st.expander("Backtesting por umbrales del indicador", expanded=False):
         "un porcentaje de la posición. Todas se ejecutan al precio del día siguiente."
     )
     bt_defaults = load_yaml_config("bitcoin_opportunity.yaml").get("backtesting", {})
+    if profile_label := bt_defaults.get("default_profile_label"):
+        st.info(
+            f"Valores por defecto: {profile_label}. Es una referencia histórica, no una "
+            "garantía de rendimiento futuro."
+        )
     if history_frame.empty:
         cached_start = history_start
         cached_end = history_end
@@ -593,6 +688,13 @@ with st.expander("Backtesting por umbrales del indicador", expanded=False):
         metric_columns[4].metric("Compras", backtest_result.buy_count)
         metric_columns[5].metric("Ventas", backtest_result.sell_count)
         st.plotly_chart(_backtest_chart(backtest_result), width="stretch")
+        st.markdown("**Precio de Bitcoin y ejecuciones de la estrategia**")
+        st.caption(
+            "Los triángulos verdes indican compras y los descendentes indican ventas. "
+            "La leyenda identifica el umbral o los umbrales cruzados; pasa el cursor "
+            "para consultar score, porcentaje e importe ejecutado."
+        )
+        st.plotly_chart(_backtest_trade_chart(backtest_result), width="stretch")
         if backtest_result.events.empty:
             st.info("La configuración no generó operaciones en el periodo.")
         else:
