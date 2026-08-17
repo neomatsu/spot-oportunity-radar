@@ -16,6 +16,7 @@ from data.repositories.signals_repo import SignalsRepository
 from services.bitcoin_opportunity_alerts_service import BitcoinOpportunityAlertsService
 from services.bitcoin_opportunity_service import BitcoinOpportunityService
 from services.notification_service import NotificationService
+from services.planned_entry_service import PlannedEntryService
 from services.portfolio_service import PortfolioService
 from services.position_management_alerts_service import (
     PositionContext,
@@ -60,6 +61,7 @@ class AlertService:
         self.rsi_cycle_alerts_service = RSICycleAlertsService()
         self.bitcoin_opportunity_alerts_service = BitcoinOpportunityAlertsService()
         self.bitcoin_opportunity_service = BitcoinOpportunityService(session)
+        self.planned_entry_service = PlannedEntryService(session)
 
     def scan_market_events(self) -> AlertRunSummary:
         summary = AlertRunSummary()
@@ -105,6 +107,11 @@ class AlertService:
     def send_pending_alerts(self) -> AlertRunSummary:
         summary = AlertRunSummary()
         for alert in self.alerts_repo.list_pending():
+            if alert.asset_id is not None:
+                position = self.portfolio_repo.get_by_asset_id(alert.asset_id)
+                payload = dict(alert.payload_json or {})
+                payload["is_portfolio_asset"] = self._has_open_position(position)
+                alert.payload_json = payload
             results = self.notification_service.send_alert(alert)
             sent = False
             alert_failed = False
@@ -265,6 +272,87 @@ class AlertService:
             == str(self.bitcoin_opportunity_service.config.get("bitcoin_symbol", "BTCUSDT"))
         ):
             events.extend(self._detect_bitcoin_opportunity_events(asset=asset, row=row))
+        if rules.get("enable_planned_entry_alerts", True):
+            events.extend(self._detect_planned_entry_events(asset=asset, row=row))
+        return events
+
+    def _detect_planned_entry_events(
+        self,
+        *,
+        asset: AssetORM,
+        row: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        current_price = self._as_float(row.get("last_price"))
+        observed_date = self.prices_repo.latest_date(asset.id)
+        if current_price is None or observed_date is None:
+            return []
+
+        events: list[dict[str, Any]] = []
+        for trigger in self.planned_entry_service.evaluate_asset(
+            asset=asset,
+            current_price=current_price,
+            observed_date=observed_date,
+        ):
+            levels = sorted(trigger.levels, key=lambda level: level.target_price, reverse=True)
+            level_payloads = [
+                {
+                    "id": level.id,
+                    "target_price": level.target_price,
+                    "currency": level.price_currency,
+                    "distance_pct": round(
+                        self.planned_entry_service.distance_pct(
+                            current_price, level.target_price
+                        ),
+                        3,
+                    ),
+                    "suggested_weight_pct": level.suggested_weight_pct,
+                    "suggested_capital": level.suggested_capital,
+                    "notes": level.notes,
+                }
+                for level in levels
+            ]
+            crossed = trigger.event_type == "manual_buy_level_crossed"
+            action_parts: list[str] = []
+            total_weight = sum(level.suggested_weight_pct or 0.0 for level in levels)
+            total_capital = sum(level.suggested_capital or 0.0 for level in levels)
+            if total_weight:
+                action_parts.append(f"comprar hasta {total_weight:g}% del capital")
+            if total_capital:
+                action_parts.append(f"invertir hasta {total_capital:,.2f}")
+            action = " y ".join(action_parts) or "revisar la compra parcial planificada"
+            target_label = ", ".join(f"{level.target_price:,.2f}" for level in levels)
+            ids_label = "-".join(str(level.id) for level in levels)
+            event_label = "alcanzado" if crossed else "cercano"
+            events.append(
+                self._event_payload(
+                    asset=asset,
+                    event_type=trigger.event_type,
+                    row=row,
+                    severity=trigger.severity,
+                    title=f"{asset.symbol} · nivel de compra {event_label}",
+                    message=(
+                        f"Precio {current_price:,.2f}; nivel(es) planificado(s): "
+                        f"{target_label}."
+                    ),
+                    alert_group="planned_entry",
+                    material_value=current_price,
+                    position_metrics={
+                        "planned_entry_levels": level_payloads,
+                        "planned_entry_level_count": len(levels),
+                        "planned_entry_target": levels[0].target_price,
+                        "planned_entry_distance_pct": level_payloads[0]["distance_pct"],
+                        "recommended_trade_pct": total_weight or None,
+                        "recommended_capital": total_capital or None,
+                        "signal_date": str(trigger.observed_date),
+                        "strategy_name": "manual_planned_entry",
+                    },
+                    action_suggestion=action.capitalize(),
+                    dedupe_key=(
+                        f"{asset.symbol}:{trigger.event_type}:{ids_label}:"
+                        f"{trigger.observed_date}"
+                    ),
+                )
+            )
         return events
 
     def _detect_bitcoin_opportunity_events(
@@ -427,6 +515,9 @@ class AlertService:
             logger.info("%s suppresssed by cooldown for %s", event.event_type, event.symbol)
             return "deduplicated"
 
+        position = self.portfolio_repo.get_by_asset_id(event.asset_id)
+        alert_payload = dict(payload["alert_payload"])
+        alert_payload["is_portfolio_asset"] = self._has_open_position(position)
         alert = self.alerts_repo.create_alert(
             {
                 "asset_id": event.asset_id,
@@ -435,7 +526,7 @@ class AlertService:
                 "severity": payload["severity"],
                 "title": payload["title"],
                 "message": payload["message"],
-                "payload_json": payload["alert_payload"],
+                "payload_json": alert_payload,
                 "status": "new",
                 "delivery_channels": ["ui", "telegram", "console"],
                 "dedupe_key": dedupe_key,

@@ -1,0 +1,7 @@
+planned_entries:
+  enabled: true
+  default_tolerance_pct: 1.0
+  default_rearm_distance_pct: 3.0
+  default_suggested_weight_pct: 5.0
+  near_severity: warning
+  crossed_severity: high

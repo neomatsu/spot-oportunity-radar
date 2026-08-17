@@ -13,8 +13,10 @@ import streamlit as st
 from core.config import get_settings, load_yaml_config  # noqa: E402
 from data.database import init_db, session_scope  # noqa: E402
 from data.repositories.alerts_repo import AlertsRepository  # noqa: E402
+from data.repositories.planned_entries_repo import PlannedEntriesRepository  # noqa: E402
 from data.repositories.trade_intents_repo import TradeIntentsRepository  # noqa: E402
 from services.alert_service import AlertService  # noqa: E402
+from services.planned_entry_service import PlannedEntryService  # noqa: E402
 
 st.title("Alerts")
 st.caption(
@@ -53,6 +55,7 @@ with session_scope() as session:
     alerts = alerts_repo.list_recent()
     intents = intents_repo.list_recent()
     notification_logs = alerts_repo.list_notification_logs()
+    planned_levels = PlannedEntriesRepository(session).list_all()
 
 pending_alerts = sum(1 for alert in alerts if alert.status == "new")
 open_intents = sum(1 for intent in intents if intent.status in {"new", "reviewed", "approved"})
@@ -100,8 +103,8 @@ intents_df = pd.DataFrame(
     ]
 )
 
-tab_active, tab_history, tab_intents, tab_config = st.tabs(
-    ["Alertas activas", "Historial", "Trade intents", "Configuración"]
+tab_active, tab_history, tab_intents, tab_plans, tab_config = st.tabs(
+    ["Alertas activas", "Historial", "Trade intents", "Planes de compra", "Configuración"]
 )
 
 # ---- Tab: Alertas activas ----
@@ -244,6 +247,75 @@ with tab_intents:
                     st.markdown(kv_pairs)
                 with st.expander("Rationale completo", expanded=False):
                     st.json(rationale)
+
+# ---- Tab: Planes de compra ----
+with tab_plans:
+    st.subheader("Puntos de compra parcial")
+    st.caption(
+        "Los niveles se crean desde Asset Detail. Active y triggered se vigilan en cada "
+        "escaneo diario; triggered se rearma automáticamente al alejarse."
+    )
+    if not planned_levels:
+        st.info("Todavía no hay niveles de compra planificados.")
+    else:
+        plan_rows = [
+            {
+                "ID": level.id,
+                "Símbolo": level.asset.symbol,
+                "Estado": level.status,
+                "Precio objetivo": level.target_price,
+                "Divisa": level.price_currency or level.asset.quote_currency or "N/A",
+                "Último precio observado": level.last_observed_price,
+                "Distancia %": (
+                    round(
+                        PlannedEntryService.distance_pct(
+                            level.last_observed_price, level.target_price
+                        ),
+                        2,
+                    )
+                    if level.last_observed_price is not None
+                    else None
+                ),
+                "% sugerido": level.suggested_weight_pct,
+                "Capital sugerido": level.suggested_capital,
+                "Tolerancia %": level.tolerance_pct,
+                "Expira": level.expires_at,
+                "Último aviso": level.last_alerted_at,
+                "Notas": level.notes,
+            }
+            for level in planned_levels
+        ]
+        plan_df = pd.DataFrame(plan_rows)
+        filter_col1, filter_col2 = st.columns(2)
+        plan_symbols = sorted(plan_df["Símbolo"].unique().tolist())
+        plan_statuses = sorted(plan_df["Estado"].unique().tolist())
+        symbol_filter = filter_col1.multiselect(
+            "Símbolo", plan_symbols, default=plan_symbols, key="plan_symbol_filter"
+        )
+        status_filter = filter_col2.multiselect(
+            "Estado", plan_statuses, default=plan_statuses, key="plan_status_filter"
+        )
+        filtered_plans = plan_df[
+            plan_df["Símbolo"].isin(symbol_filter) & plan_df["Estado"].isin(status_filter)
+        ]
+        st.dataframe(filtered_plans.drop(columns=["ID"]), use_container_width=True, hide_index=True)
+        if not filtered_plans.empty:
+            edit_col1, edit_col2, edit_col3 = st.columns([2, 2, 1])
+            plan_id = edit_col1.selectbox(
+                "Seleccionar plan",
+                filtered_plans["ID"].tolist(),
+                format_func=lambda value: f"#{value}",
+                key="alert_plan_id",
+            )
+            plan_status = edit_col2.selectbox(
+                "Cambiar estado",
+                ["active", "paused", "executed_manually", "expired"],
+                key="alert_plan_status",
+            )
+            if edit_col3.button("Aplicar", key="alert_plan_apply", use_container_width=True):
+                with session_scope() as session:
+                    PlannedEntryService(session).set_status(plan_id, plan_status)
+                st.rerun()
 
 # ---- Tab: Configuración ----
 with tab_config:

@@ -37,7 +37,12 @@ class NotificationService:
         severity_enabled = set(self.config.get("telegram", {}).get("enabled_for", []))
         if alert.severity not in severity_enabled:
             return NotificationResult(channel="telegram", status="skipped")
-        if not self._telegram_allows_alert_type(alert.alert_type):
+        if not self._telegram_allows_alert_type(
+            alert.alert_type,
+            is_portfolio_asset=bool(
+                (alert.payload_json or {}).get("is_portfolio_asset", False)
+            ),
+        ):
             return NotificationResult(channel="telegram", status="skipped")
 
         if (
@@ -64,8 +69,17 @@ class NotificationService:
             logger.warning("Fallo enviando alerta %s por Telegram: %s", alert.id, exc)
             return NotificationResult(channel="telegram", status="error", error_message=str(exc))
 
-    def _telegram_allows_alert_type(self, alert_type: str) -> bool:
+    def _telegram_allows_alert_type(
+        self,
+        alert_type: str,
+        *,
+        is_portfolio_asset: bool = False,
+    ) -> bool:
         telegram_cfg = self.config.get("telegram", {})
+        if is_portfolio_asset and telegram_cfg.get(
+            "portfolio_assets_allow_all_alert_types", False
+        ):
+            return True
         enabled_alert_types = telegram_cfg.get("enabled_alert_types")
         if enabled_alert_types is not None:
             return alert_type in set(enabled_alert_types)
@@ -94,6 +108,12 @@ class NotificationService:
             ),
             "bitcoin_opportunity_sell": telegram_cfg.get(
                 "send_bitcoin_opportunity_alerts", False
+            ),
+            "manual_buy_level_near": telegram_cfg.get(
+                "send_planned_entry_alerts", True
+            ),
+            "manual_buy_level_crossed": telegram_cfg.get(
+                "send_planned_entry_alerts", True
             ),
         }
         return type_flags.get(alert_type, True)
@@ -130,6 +150,19 @@ class NotificationService:
                 f"Porcentaje sugerido: {payload['recommended_trade_pct']:g}% "
                 f"del {payload.get('recommended_trade_basis', 'capital/posicion')}"
             )
+        if payload.get("planned_entry_levels"):
+            levels = ", ".join(
+                f"{float(level['target_price']):,.2f}"
+                + (
+                    f" ({float(level['distance_pct']):+.2f}%)"
+                    if level.get("distance_pct") is not None
+                    else ""
+                )
+                for level in payload["planned_entry_levels"]
+            )
+            lines.append(f"Niveles planificados: {levels}")
+        if payload.get("recommended_capital") is not None:
+            lines.append(f"Capital sugerido: {float(payload['recommended_capital']):,.2f}")
         if payload.get("current_weight_pct") is not None:
             lines.append(
                 f"Peso actual: {payload['current_weight_pct']}%"

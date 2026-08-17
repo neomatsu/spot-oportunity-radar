@@ -77,6 +77,9 @@ class AssetORM(Base):
     alerts: Mapped[list[AlertORM]] = relationship(back_populates="asset")
     market_events: Mapped[list[MarketEventORM]] = relationship(back_populates="asset")
     trade_intents: Mapped[list[TradeIntentORM]] = relationship(back_populates="asset")
+    planned_entry_levels: Mapped[list[PlannedEntryLevelORM]] = relationship(
+        back_populates="asset"
+    )
 
 
 class PriceBarDailyORM(Base):
@@ -518,6 +521,37 @@ class MarketEventORM(Base):
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
 
     asset: Mapped[AssetORM | None] = relationship(back_populates="market_events")
+
+
+class PlannedEntryLevelORM(Base):
+    __tablename__ = "planned_entry_levels"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    target_price: Mapped[float] = mapped_column(Float)
+    price_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    suggested_weight_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    suggested_capital: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tolerance_pct: Mapped[float] = mapped_column(Float, default=1.0)
+    rearm_distance_pct: Mapped[float] = mapped_column(Float, default=3.0)
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True)
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    expires_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_observed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_alerted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_trigger_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    triggered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(UTC).replace(tzinfo=None),
+    )
+
+    asset: Mapped[AssetORM] = relationship(back_populates="planned_entry_levels")
 
 
 class TradeIntentORM(Base):

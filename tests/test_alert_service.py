@@ -14,6 +14,8 @@ from data.repositories.alerts_repo import AlertsRepository
 from data.repositories.bitcoin_opportunity_repo import BitcoinOpportunityRepository
 from data.repositories.trade_intents_repo import TradeIntentsRepository
 from services.alert_service import AlertService
+from services.notification_service import NotificationResult
+from services.planned_entry_service import PlannedEntryService
 from services.rsi_cycle_alerts_service import RSICycleAlertSignal
 
 
@@ -116,6 +118,7 @@ def test_generates_entry_alert_and_trade_intent(db_session) -> None:
     assert summary.alerts_created >= 1
     assert len(alerts) >= 1
     assert alerts[0].alert_type == "entry_signal"
+    assert alerts[0].payload_json["is_portfolio_asset"] is False
     assert len(intents) >= 1
     assert intents[0].status == "new"
 
@@ -130,6 +133,79 @@ def test_does_not_duplicate_alert_inside_cooldown(db_session) -> None:
     assert first.alerts_created >= 1
     assert second.alerts_deduplicated >= 1
     assert len(alerts) == 1
+
+
+def test_planned_entry_level_uses_existing_alert_pipeline(db_session) -> None:
+    asset = _seed_actionable_asset(
+        db_session,
+        symbol="PLAN_ALERT",
+        recommendation="WATCH",
+        score=50,
+        last_price=100.5,
+    )
+    PlannedEntryService(db_session).create_level(
+        asset=asset,
+        target_price=100,
+        suggested_weight_pct=7.5,
+        tolerance_pct=1,
+        rearm_distance_pct=3,
+    )
+
+    service = AlertService(db_session)
+    first = service.scan_market_events()
+    second = service.scan_market_events()
+    alerts = AlertsRepository(db_session).list_recent()
+    planned = [alert for alert in alerts if alert.alert_type == "manual_buy_level_near"]
+
+    assert first.alerts_created == 1
+    assert second.events_detected == 0
+    assert len(planned) == 1
+    assert planned[0].payload_json["alert_group"] == "planned_entry"
+    assert planned[0].payload_json["recommended_trade_pct"] == 7.5
+
+
+def test_pending_alert_rechecks_portfolio_membership_before_delivery(db_session) -> None:
+    asset = _seed_actionable_asset(
+        db_session,
+        symbol="ETF_PORTFOLIO",
+        recommendation="WATCH",
+    )
+    db_session.add(
+        PortfolioPositionORM(
+            asset_id=asset.id,
+            quantity=2,
+            avg_cost=100,
+            current_weight=0.05,
+            target_weight=0.05,
+        )
+    )
+    db_session.flush()
+    service = AlertService(db_session)
+    alert = service.alerts_repo.create_alert(
+        {
+            "asset_id": asset.id,
+            "symbol": asset.symbol,
+            "alert_type": "risk_deterioration",
+            "severity": "warning",
+            "title": "Riesgo",
+            "message": "Cambio de riesgo",
+            "payload_json": {"is_portfolio_asset": False},
+            "status": "new",
+            "delivery_channels": ["ui", "telegram"],
+            "dedupe_key": f"{asset.symbol}:risk_deterioration",
+        }
+    )
+    delivered: list[bool] = []
+    service.notification_service.send_alert = lambda pending: (
+        delivered.append(pending.payload_json["is_portfolio_asset"])
+        or [NotificationResult(channel="console", status="sent")]
+    )
+
+    summary = service.send_pending_alerts()
+
+    assert summary.alerts_sent == 1
+    assert delivered == [True]
+    assert alert.payload_json["is_portfolio_asset"] is True
 
 
 def test_realerts_when_severity_changes_materially(db_session) -> None:
@@ -239,7 +315,8 @@ def test_trim_position_alert_triggers_with_excess_weight(db_session) -> None:
     AlertService(db_session).scan_market_events()
     alerts = AlertsRepository(db_session).list_recent()
 
-    assert any(alert.alert_type == "trim_position" for alert in alerts)
+    trim_alert = next(alert for alert in alerts if alert.alert_type == "trim_position")
+    assert trim_alert.payload_json["is_portfolio_asset"] is True
 
 
 def test_take_profit_alert_triggers_with_profit_and_extension(db_session) -> None:

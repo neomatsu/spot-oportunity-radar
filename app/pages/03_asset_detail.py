@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +14,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 from sqlalchemy import select
 
+from core.config import load_yaml_config  # noqa: E402
 from data.database import (  # noqa: E402
     AssetDataStatusORM,
     SignalORM,
@@ -20,8 +22,10 @@ from data.database import (  # noqa: E402
     session_scope,
 )
 from data.repositories.assets_repo import AssetsRepository  # noqa: E402
+from data.repositories.planned_entries_repo import PlannedEntriesRepository  # noqa: E402
 from data.repositories.prices_repo import PricesRepository  # noqa: E402
 from services.historical_score_service import HistoricalScoreService  # noqa: E402
+from services.planned_entry_service import PlannedEntryService  # noqa: E402
 from services.support_detection_service import SupportDetectionService  # noqa: E402
 from services.technical_service import TechnicalService  # noqa: E402
 
@@ -33,6 +37,9 @@ RANGE_OPTIONS = {
     "6 meses": 182,
     "3 meses": 91,
 }
+PLANNED_ENTRY_DEFAULTS = load_yaml_config("planned_entries.yaml").get(
+    "planned_entries", {}
+)
 
 st.title("Asset Detail")
 
@@ -64,6 +71,8 @@ with session_scope() as session:
 
         last_price = float(price_frame["close"].iloc[-1]) if not price_frame.empty else None
         last_price_date = price_frame["date"].iloc[-1] if not price_frame.empty else None
+        planned_entries_repo = PlannedEntriesRepository(session)
+        planned_levels = planned_entries_repo.list_for_asset(asset.id)
 
         # --- Cabecera del activo ---
         st.subheader(f"{asset.name} ({asset.symbol})")
@@ -114,6 +123,134 @@ with session_scope() as session:
                 if data_status else "N/A",
             )
 
+        # --- Plan de entradas manuales ---
+        with st.expander("Plan de compras parciales", expanded=bool(planned_levels)):
+            st.caption(
+                "Añade varios niveles independientes. El job diario avisa una vez al entrar "
+                "en la tolerancia y rearma el nivel cuando el precio vuelve a alejarse."
+            )
+            with st.form(f"planned_entry_form_{asset.id}", clear_on_submit=False):
+                plan_col1, plan_col2, plan_col3 = st.columns(3)
+                target_price = plan_col1.number_input(
+                    "Precio objetivo",
+                    min_value=0.000001,
+                    value=float(last_price or 1.0),
+                    format="%.6f",
+                )
+                suggested_weight_pct = plan_col2.number_input(
+                    "% de capital sugerido",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(
+                        PLANNED_ENTRY_DEFAULTS.get("default_suggested_weight_pct", 5.0)
+                    ),
+                    step=1.0,
+                )
+                suggested_capital = plan_col3.number_input(
+                    "Capital sugerido (opcional)",
+                    min_value=0.0,
+                    value=0.0,
+                    step=100.0,
+                )
+                rule_col1, rule_col2, rule_col3 = st.columns(3)
+                tolerance_pct = rule_col1.number_input(
+                    "Avisar a distancia (%)",
+                    min_value=0.0,
+                    value=float(
+                        PLANNED_ENTRY_DEFAULTS.get("default_tolerance_pct", 1.0)
+                    ),
+                    step=0.25,
+                )
+                rearm_distance_pct = rule_col2.number_input(
+                    "Rearmar al alejarse (%)",
+                    min_value=0.1,
+                    value=float(
+                        PLANNED_ENTRY_DEFAULTS.get("default_rearm_distance_pct", 3.0)
+                    ),
+                    step=0.5,
+                )
+                use_expiry = rule_col3.checkbox("Usar fecha de expiración", value=False)
+                expires_at = st.date_input(
+                    "Expira el",
+                    value=date.today() + timedelta(days=90),
+                    disabled=not use_expiry,
+                )
+                notes = st.text_input("Notas / motivo del nivel", value="")
+                create_level = st.form_submit_button(
+                    "Añadir nivel de compra", type="primary", use_container_width=True
+                )
+            if create_level:
+                try:
+                    PlannedEntryService(session).create_level(
+                        asset=asset,
+                        target_price=target_price,
+                        suggested_weight_pct=suggested_weight_pct or None,
+                        suggested_capital=suggested_capital or None,
+                        tolerance_pct=tolerance_pct,
+                        rearm_distance_pct=rearm_distance_pct,
+                        notes=notes,
+                        expires_at=expires_at if use_expiry else None,
+                    )
+                    session.commit()
+                    st.success("Nivel de compra añadido.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
+            if planned_levels:
+                plan_rows = []
+                for level in planned_levels:
+                    distance = (
+                        PlannedEntryService.distance_pct(last_price, level.target_price)
+                        if last_price is not None
+                        else None
+                    )
+                    plan_rows.append(
+                        {
+                            "ID": level.id,
+                            "Estado": level.status,
+                            "Precio objetivo": level.target_price,
+                            "Divisa": level.price_currency or asset.quote_currency or "N/A",
+                            "Distancia %": round(distance, 2) if distance is not None else None,
+                            "% sugerido": level.suggested_weight_pct,
+                            "Capital sugerido": level.suggested_capital,
+                            "Tolerancia %": level.tolerance_pct,
+                            "Rearme %": level.rearm_distance_pct,
+                            "Expira": level.expires_at,
+                            "Notas": level.notes,
+                        }
+                    )
+                st.dataframe(pd.DataFrame(plan_rows), use_container_width=True, hide_index=True)
+                manage_col1, manage_col2, manage_col3 = st.columns([2, 2, 1])
+                selected_level_id = manage_col1.selectbox(
+                    "Gestionar nivel",
+                    [level.id for level in planned_levels],
+                    format_func=lambda level_id: next(
+                        f"#{level.id} · {level.target_price:,.2f} · {level.status}"
+                        for level in planned_levels
+                        if level.id == level_id
+                    ),
+                    key=f"planned_entry_manage_{asset.id}",
+                )
+                selected_status = manage_col2.selectbox(
+                    "Nuevo estado",
+                    ["active", "paused", "executed_manually", "expired"],
+                    key=f"planned_entry_status_{asset.id}",
+                )
+                if manage_col3.button(
+                    "Aplicar", key=f"planned_entry_apply_{asset.id}", use_container_width=True
+                ):
+                    PlannedEntryService(session).set_status(selected_level_id, selected_status)
+                    session.commit()
+                    st.rerun()
+                if st.button(
+                    "Eliminar nivel seleccionado",
+                    key=f"planned_entry_delete_{asset.id}",
+                ):
+                    planned_entries_repo.delete(selected_level_id)
+                    session.commit()
+                    st.rerun()
+
         if price_frame.empty:
             st.warning("No hay histórico de precios para este activo.")
         else:
@@ -159,6 +296,27 @@ with session_scope() as session:
                 )
             for band in support_service.build_zone_bands(support_zones):
                 price_fig.add_hrect(**band)
+            for level in planned_levels:
+                if level.status not in {"active", "triggered"}:
+                    continue
+                band_color = (
+                    "rgba(245, 158, 11, 0.20)"
+                    if level.status == "active"
+                    else "rgba(37, 99, 235, 0.18)"
+                )
+                price_fig.add_hrect(
+                    y0=level.target_price,
+                    y1=level.target_price * (1.0 + level.tolerance_pct / 100.0),
+                    fillcolor=band_color,
+                    line_width=1,
+                    line_color="#d97706" if level.status == "active" else "#2563eb",
+                    annotation_text=(
+                        f"Plan compra {level.suggested_weight_pct:g}%"
+                        if level.suggested_weight_pct
+                        else "Plan compra"
+                    ),
+                    annotation_position="top left",
+                )
             visible_low = float(display_frame["low"].min())
             visible_high = float(display_frame["high"].max())
             visible_range = max(visible_high - visible_low, visible_high * 0.02, 1.0)

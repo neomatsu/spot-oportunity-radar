@@ -1245,3 +1245,16 @@ python -m ruff check .
 - enriquecer la deteccion de soporte con clustering de pivots
 - enriquecer el modo portfolio con mark-to-market diario y restricciones mas finas
 - incorporar metricas de acierto por recomendacion y por clase de activo
+# Planes manuales de compra parcial
+
+Asset Detail permite registrar varios niveles de compra por activo sin crear una posición ni
+modificar el scoring. Cada nivel puede incluir porcentaje de capital, capital nominal,
+tolerancia, distancia de rearme, expiración y notas. Los niveles activos se muestran como
+bandas en el gráfico de precio y se consultan globalmente desde `Alerts > Planes de compra`.
+
+El escaneo diario genera `manual_buy_level_near` al entrar en la banda y
+`manual_buy_level_crossed` al alcanzar o perforar el objetivo. Después del primer aviso el
+nivel queda `triggered` y no vuelve a alertar hasta que el precio se aleja por encima de la
+distancia de rearme. Ambos tipos usan la persistencia, UI, deduplicación y Telegram existentes;
+sus defaults están en `config/planned_entries.yaml`, `config/alerts.yaml` y
+`config/notifications.yaml`.

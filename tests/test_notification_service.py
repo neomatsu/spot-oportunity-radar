@@ -101,6 +101,39 @@ def test_telegram_can_filter_exact_alert_types() -> None:
     assert telegram_result.status == "skipped"
 
 
+def test_portfolio_asset_bypasses_exact_alert_type_filter() -> None:
+    service = NotificationService()
+    service.config["telegram"]["enabled_alert_types"] = ["entry_signal"]
+    service.config["telegram"]["portfolio_assets_allow_all_alert_types"] = True
+
+    assert service._telegram_allows_alert_type(
+        "risk_deterioration", is_portfolio_asset=True
+    )
+    assert not service._telegram_allows_alert_type(
+        "risk_deterioration", is_portfolio_asset=False
+    )
+
+
+def test_planned_entry_alert_is_allowed_and_message_lists_level() -> None:
+    service = NotificationService()
+    service.config["telegram"]["enabled_alert_types"] = ["manual_buy_level_near"]
+    alert = _build_alert()
+    alert.alert_type = "manual_buy_level_near"
+    alert.payload_json = {
+        "last_price": 100.5,
+        "planned_entry_levels": [
+            {"target_price": 100.0, "distance_pct": 0.5},
+        ],
+        "recommended_trade_pct": 7.5,
+        "recommended_trade_basis": "capital",
+    }
+
+    assert service._telegram_allows_alert_type(alert.alert_type)
+    message = service.build_telegram_message(alert)
+    assert "Niveles planificados: 100.00 (+0.50%)" in message
+    assert "Porcentaje sugerido: 7.5%" in message
+
+
 def test_telegram_can_send_take_profit_when_type_is_allowed(monkeypatch) -> None:
     service = NotificationService()
     service.config["channels"]["telegram"] = True

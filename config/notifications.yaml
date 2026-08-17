@@ -5,6 +5,7 @@ channels:
   email: false
 
 telegram:
+  portfolio_assets_allow_all_alert_types: true
   enabled_for:
     - info
     - warning
@@ -20,6 +21,8 @@ telegram:
     - sell_bearish_divergence
     - bitcoin_opportunity_buy
     - bitcoin_opportunity_sell
+    - manual_buy_level_near
+    - manual_buy_level_crossed
   send_entry_alerts: true
   send_risk_alerts: false
   send_data_alerts: false
@@ -28,6 +31,7 @@ telegram:
   send_sell_alerts: false
   send_rsi_cycle_alerts: false
   send_bitcoin_opportunity_alerts: true
+  send_planned_entry_alerts: true
 
 formatting:
   include_buy_zone: true
