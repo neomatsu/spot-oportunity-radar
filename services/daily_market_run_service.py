@@ -11,6 +11,7 @@ from data.repositories.job_runs_repo import JobRunsRepository
 from services.alert_service import AlertService
 from services.bitcoin_opportunity_service import BitcoinOpportunityService
 from services.recommendation_facade import RecommendationFacade
+from services.sp500_opportunity_service import SP500OpportunityService
 
 logger = get_logger(__name__)
 
@@ -117,6 +118,19 @@ class DailyMarketRunService:
                         )
                         summary.warnings.append(
                             f"Bitcoin Opportunity no actualizado: {exc}"
+                        )
+                if self.config.get("runner", {}).get(
+                    "update_sp500_opportunity_history", False
+                ):
+                    try:
+                        logger.info("Actualizando indicador S&P 500 Opportunity")
+                        SP500OpportunityService(self.session).update_latest_history()
+                    except Exception as exc:
+                        logger.warning(
+                            "No se pudo actualizar S&P 500 Opportunity: %s", exc
+                        )
+                        summary.warnings.append(
+                            f"S&P 500 Opportunity no actualizado: {exc}"
                         )
                 logger.info("Iniciando deteccion de eventos y alertas")
                 alert_summary = self.alert_service.scan_market_events()

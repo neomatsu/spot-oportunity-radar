@@ -24,6 +24,7 @@ dependencies = [
   "SQLAlchemy>=2.0,<3.0",
   "streamlit>=1.39,<2.0",
   "yfinance>=0.2.54,<0.3.0",
+  "xlrd>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]

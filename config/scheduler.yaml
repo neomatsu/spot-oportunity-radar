@@ -1,6 +1,7 @@
 runner:
   recommended_run_time: "08:15 Europe/Madrid"
   update_bitcoin_opportunity_history: true
+  update_sp500_opportunity_history: true
   default_force_refresh: false
   allow_demo_mode: true
   send_notifications_by_default: true

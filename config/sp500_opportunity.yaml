@@ -1,0 +1,162 @@
+index_symbol: "^GSPC"
+minimum_available_components: 3
+
+weights:
+  valuation: 0.15
+  sentiment: 0.20
+  momentum: 0.15
+  drawdown: 0.25
+  breadth: 0.15
+  macro: 0.10
+
+classification:
+  - {min_score: 90, label: "CAPITULACION_EXTREMA"}
+  - {min_score: 80, label: "OPORTUNIDAD_EXCEPCIONAL"}
+  - {min_score: 70, label: "BUENA_OPORTUNIDAD"}
+  - {min_score: 60, label: "OPORTUNIDAD"}
+  - {min_score: 45, label: "NEUTRAL"}
+  - {min_score: 25, label: "POCO_ATRACTIVO"}
+  - {min_score: 0, label: "MUY_DESFAVORABLE"}
+
+visualization:
+  thresholds:
+    - {score: 65, label: "Buena oportunidad"}
+    - {score: 80, label: "Excepcional"}
+
+history:
+  default_start_date: "1990-01-02"
+  maximum_start_date: "1980-01-01"
+  warmup_years: 20
+  source_version: "sp500_opportunity_v5_rolling_calibration"
+  minimum_percentile_observations: 252
+
+score_calibration:
+  enabled: true
+  target_mean: 50.0
+  trailing_years: 5
+  minimum_history_years: 2
+  dispersion_scale: 0.80
+
+market_data:
+  cache_dir: "cache/sp500_opportunity"
+  timeout_seconds: 45
+  retries: 2
+
+valuation:
+  enabled: true
+  # Yale currently serves this public workbook only over HTTP; HTTPS rejects the connection.
+  source_url: "http://www.econ.yale.edu/~shiller/data/ie_data.xls"
+  publication_lag_days: 45
+  minimum_percentile_observations: 60
+  maximum_staleness_days: 120
+  point_in_time_safe: false
+  historical_reference_start: "1871-01-01"
+  rolling_window_years: 20
+  rolling_minimum_observations: 1260
+  subweights:
+    full_history: 0.50
+    rolling_20y: 0.25
+    excess_cape_yield: 0.25
+  neutral_shrinkage:
+    enabled: true
+    weight: 0.25
+    anchor_score: 5.0
+  real_yield:
+    enabled: true
+    fred_series: "DFII10"
+    source_url: "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10"
+    publication_lag_days: 1
+    minimum_percentile_observations: 252
+    maximum_staleness_days: 10
+  extension:
+    enabled: true
+    provider: "multpl"
+    source_url: "https://www.multpl.com/shiller-pe/table/by-month"
+    overlap_months: 12
+    maximum_median_difference_pct: 3.0
+    user_agent: "Mozilla/5.0 SpotOpportunityRadar/1.0"
+    verification_url: "https://www.gurufocus.com/economic_indicators/56/sp-500-shiller-cape-ratio"
+
+sentiment:
+  enabled: true
+  source_url: "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv"
+  minimum_percentile_observations: 252
+  maximum_staleness_days: 10
+
+momentum:
+  rsi_daily_period: 14
+  rsi_weekly_period: 14
+  sma_period: 200
+  subweights:
+    rsi_daily: 0.25
+    rsi_weekly: 0.25
+    distance_sma200: 0.50
+
+drawdown:
+  method: "percentile"
+  thresholds:
+    - {max_drawdown_pct: -50, score: 10}
+    - {max_drawdown_pct: -40, score: 9}
+    - {max_drawdown_pct: -30, score: 8}
+    - {max_drawdown_pct: -20, score: 7}
+    - {max_drawdown_pct: -10, score: 4}
+    - {max_drawdown_pct: 0, score: 0}
+
+breadth:
+  enabled: true
+  download_if_missing: false
+  constituents_cache: "cache/sp500_scoring/constituents.csv"
+  prices_cache_dir: "cache/sp500_scoring/prices"
+  minimum_constituents: 300
+  minimum_percentile_observations: 126
+  maximum_staleness_days: 10
+  point_in_time_safe: false
+
+macro:
+  enabled: true
+  fred_series: "DFF"
+  source_url: "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFF"
+  publication_lag_days: 1
+  level_weight: 0.60
+  change_weight: 0.40
+  change_lookback_sessions: 63
+  minimum_percentile_observations: 252
+  maximum_staleness_days: 10
+  point_in_time_safe: false
+
+forward_returns:
+  horizons_sessions:
+    3m: 63
+    6m: 126
+    12m: 252
+    24m: 504
+    36m: 756
+    60m: 1260
+  score_bands: [0, 20, 40, 60, 70, 80, 90, 100.0001]
+
+backtesting:
+  default_profile_label: "Mejor configuracion robusta del estudio escalonado"
+  default_profile_config_id: "bb999ff432dfd479"
+  initial_capital: 100000
+  buy_sizing_basis: "available_cash"
+  buy_thresholds: [60, 62.5, 77.5]
+  buy_capital_pcts: [0.50, 0.50, 0.50]
+  sell_thresholds: [25, 40, 45]
+  sell_position_pcts: [0.50, 0.20, 0.20]
+  buy_reset_threshold: 55
+  sell_reset_threshold: 55
+  commission_bps: 8
+  slippage_bps: 5
+  minimum_trade_value: 50
+  validation_split_date: "2016-01-01"
+  sensitivity_threshold_offsets: [-5, 0, 5]
+
+alerts:
+  enabled: true
+  history_years: 10
+  buy_thresholds: [60, 62.5, 77.5]
+  buy_capital_pcts: [0.50, 0.50, 0.50]
+  sell_thresholds: [25]
+  sell_position_pcts: [0.50]
+  buy_reset_threshold: 55
+  sell_reset_threshold: 55

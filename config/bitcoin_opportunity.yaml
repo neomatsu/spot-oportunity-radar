@@ -77,6 +77,7 @@ history:
 backtesting:
   default_profile_label: "Mejor configuracion historica actual (2018-2026)"
   initial_capital: 100000
+  buy_sizing_basis: "available_cash"
   buy_thresholds: [70, 75, 80]
   buy_capital_pcts: [0.10, 0.40, 0.40]
   sell_thresholds: [15, 20, 25]

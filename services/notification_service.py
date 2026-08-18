@@ -109,6 +109,12 @@ class NotificationService:
             "bitcoin_opportunity_sell": telegram_cfg.get(
                 "send_bitcoin_opportunity_alerts", False
             ),
+            "sp500_opportunity_buy": telegram_cfg.get(
+                "send_sp500_opportunity_alerts", False
+            ),
+            "sp500_opportunity_sell": telegram_cfg.get(
+                "send_sp500_opportunity_alerts", False
+            ),
             "manual_buy_level_near": telegram_cfg.get(
                 "send_planned_entry_alerts", True
             ),
@@ -140,6 +146,10 @@ class NotificationService:
             lines.append(f"RSI14: {payload['rsi14']:.2f}")
         if payload.get("opportunity_score") is not None:
             lines.append(f"Bitcoin Opportunity: {payload['opportunity_score']:.2f}/100")
+        if payload.get("sp500_opportunity_score") is not None:
+            lines.append(
+                f"S&P 500 Opportunity: {payload['sp500_opportunity_score']:.2f}/100"
+            )
         if payload.get("crossed_thresholds"):
             thresholds = "/".join(
                 f"{float(value):g}" for value in payload["crossed_thresholds"]

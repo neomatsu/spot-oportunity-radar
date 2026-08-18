@@ -1,0 +1,54 @@
+source_version: "sp500_opportunity_v5_rolling_calibration"
+output_dir: "reports/sp500_opportunity_optimization"
+
+periods:
+  train: ["1995-01-01", "2012-12-31"]
+  validation: ["2013-01-01", "2019-12-31"]
+  test: ["2020-01-01", "2026-12-31"]
+
+execution:
+  initial_capital: 100000
+  buy_sizing_basis: "available_cash"
+  commission_bps: 8
+  slippage_bps: 5
+  minimum_trade_value: 50
+  buy_reset_threshold: 55
+  sell_reset_threshold: 55
+
+stage_1_thresholds:
+  buy_candidates: [60, 65, 70, 75, 80, 85]
+  sell_candidates: [15, 20, 25, 30, 35, 40, 45, 50]
+  fixed_buy_pcts: [0.10, 0.20, 0.40]
+  fixed_sell_pcts: [0.40, 0.20, 0.10]
+  keep_top: 10
+
+stage_2_sizing:
+  percentage_candidates: [0.0, 0.10, 0.20, 0.30, 0.40, 0.50]
+  keep_top: 10
+
+stage_3_local:
+  seed_count: 10
+  percentage_step: 0.05
+  threshold_step: 2.5
+  final_candidates: 50
+
+ranking:
+  minimum_train_buys: 5
+  minimum_validation_buys: 2
+  minimum_total_sells: 2
+  minimum_average_exposure_pct: 5
+  maximum_average_exposure_pct: 98
+  train_weight: 0.40
+  validation_weight: 0.60
+  gap_penalty: 0.25
+  metric_weights:
+    cagr_pct: 0.30
+    sharpe: 0.20
+    calmar: 0.20
+    max_drawdown_pct: 0.15
+    excess_return_pct: 0.10
+    trades: 0.05
+
+runtime:
+  checkpoint_every: 100
+  default_workers: 1

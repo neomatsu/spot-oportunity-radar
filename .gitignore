@@ -9,5 +9,10 @@ __pycache__/
 *.egg-info/
 spot_opportunity_radar.db
 cache/sp500_scoring/
+cache/sp500_opportunity/
 outputs/screeners/sp500_scoring_*.xlsx
+reports/sp500_opportunity_forward_returns.csv
+reports/sp500_opportunity_optimization/*
+!reports/sp500_opportunity_optimization/report.md
+!reports/sp500_opportunity_optimization/top_configs.csv
 .claude/

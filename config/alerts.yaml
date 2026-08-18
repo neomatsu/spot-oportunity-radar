@@ -20,6 +20,7 @@ rules:
   enable_rebalance_sell_alerts: true
   enable_rsi_cycle_alerts: true
   enable_bitcoin_opportunity_alerts: true
+  enable_sp500_opportunity_alerts: true
   enable_planned_entry_alerts: true
   min_minutes_between_duplicate_alerts: 180
   cooldown_by_asset_minutes: 180
@@ -44,6 +45,8 @@ rules:
     sell_bearish_divergence: 720
     bitcoin_opportunity_buy: 10080
     bitcoin_opportunity_sell: 10080
+    sp500_opportunity_buy: 10080
+    sp500_opportunity_sell: 10080
     manual_buy_level_near: 1440
     manual_buy_level_crossed: 1440
   risk_deterioration_threshold: 75
@@ -78,6 +81,8 @@ rules:
     sell_bearish_divergence: 3
     bitcoin_opportunity_buy: 1
     bitcoin_opportunity_sell: 1
+    sp500_opportunity_buy: 1
+    sp500_opportunity_sell: 1
     manual_buy_level_near: 0.25
     manual_buy_level_crossed: 0.25
   preferred_universes_for_high_priority:

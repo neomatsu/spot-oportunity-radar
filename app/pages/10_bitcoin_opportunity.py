@@ -549,6 +549,28 @@ with st.expander("Backtesting por umbrales del indicador", expanded=False):
             value=float(bt_defaults.get("slippage_bps", 5)),
             step=1.0,
         )
+        sizing_options = ["available_cash", "initial_capital"]
+        sizing_default = str(
+            bt_defaults.get("buy_sizing_basis", "initial_capital")
+        )
+        bt_buy_sizing_basis = st.selectbox(
+            "Base para calcular el porcentaje de compra",
+            options=sizing_options,
+            index=(
+                sizing_options.index(sizing_default)
+                if sizing_default in sizing_options
+                else 1
+            ),
+            format_func=lambda value: (
+                "Cash disponible en ese momento"
+                if value == "available_cash"
+                else "Capital inicial"
+            ),
+            help=(
+                "Con cash disponible, cada porcentaje se aplica al efectivo existente "
+                "justo antes de ejecutar la compra D+1."
+            ),
+        )
 
         reset_buy_col, reset_sell_col = st.columns(2)
         buy_reset_threshold = reset_buy_col.number_input(
@@ -637,6 +659,7 @@ with st.expander("Backtesting por umbrales del indicador", expanded=False):
         try:
             simulation_config = BitcoinOpportunityBacktestConfig(
                 initial_capital=bt_initial_capital,
+                buy_sizing_basis=bt_buy_sizing_basis,
                 buy_thresholds=tuple(buy_thresholds),  # type: ignore[arg-type]
                 buy_capital_pcts=tuple(value / 100 for value in buy_pcts),  # type: ignore[arg-type]
                 sell_thresholds=tuple(sell_thresholds),  # type: ignore[arg-type]

@@ -66,6 +66,25 @@ def test_bitcoin_opportunity_message_contains_threshold_and_percentage() -> None
     assert "Porcentaje sugerido: 90% del capital base" in message
 
 
+def test_sp500_opportunity_message_contains_threshold_and_percentage() -> None:
+    alert = _build_alert()
+    alert.symbol = "^GSPC"
+    alert.alert_type = "sp500_opportunity_buy"
+    alert.payload_json = {
+        "sp500_opportunity_score": 63.1,
+        "crossed_thresholds": [60, 62.5],
+        "recommended_trade_pct": 100.0,
+        "recommended_trade_basis": "cash disponible",
+        "action_suggestion": "Invertir 100% del cash disponible",
+    }
+
+    message = NotificationService().build_telegram_message(alert)
+
+    assert "S&P 500 Opportunity: 63.10/100" in message
+    assert "Umbrales cruzados: 60/62.5" in message
+    assert "Porcentaje sugerido: 100% del cash disponible" in message
+
+
 def test_telegram_failure_does_not_break_pipeline(monkeypatch) -> None:
     service = NotificationService()
     service.config["channels"]["telegram"] = True

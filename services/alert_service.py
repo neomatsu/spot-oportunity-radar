@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -23,6 +24,8 @@ from services.position_management_alerts_service import (
     PositionManagementAlertsService,
 )
 from services.rsi_cycle_alerts_service import RSICycleAlertsService
+from services.sp500_opportunity_alerts_service import SP500OpportunityAlertsService
+from services.sp500_opportunity_service import SP500OpportunityService
 from services.trade_intent_service import TradeIntentService
 from services.watchlist_service import WatchlistService
 
@@ -61,6 +64,8 @@ class AlertService:
         self.rsi_cycle_alerts_service = RSICycleAlertsService()
         self.bitcoin_opportunity_alerts_service = BitcoinOpportunityAlertsService()
         self.bitcoin_opportunity_service = BitcoinOpportunityService(session)
+        self.sp500_opportunity_alerts_service = SP500OpportunityAlertsService()
+        self.sp500_opportunity_service = SP500OpportunityService(session)
         self.planned_entry_service = PlannedEntryService(session)
 
     def scan_market_events(self) -> AlertRunSummary:
@@ -72,6 +77,16 @@ class AlertService:
         positions_by_asset_id = {
             position.asset_id: position for position in self.portfolio_repo.list_positions()
         }
+
+        if self.config["rules"].get("enable_sp500_opportunity_alerts", False):
+            try:
+                events = self._detect_sp500_opportunity_events()
+                summary.events_detected += len(events)
+                for event in events:
+                    self.alerts_repo.create_market_event(event)
+            except Exception as exc:  # pragma: no cover
+                logger.exception("Error detectando cruces de S&P 500 Opportunity")
+                summary.errors.append(f"S&P 500 Opportunity: {exc}")
 
         for row in rows:
             asset = assets.get(row["symbol"])
@@ -414,6 +429,69 @@ class AlertService:
             )
         ]
 
+    def _detect_sp500_opportunity_events(self) -> list[dict[str, Any]]:
+        alert_config = self.sp500_opportunity_alerts_service.config
+        if not alert_config.get("enabled", True):
+            return []
+        years = int(alert_config.get("history_years", 10))
+        end_date = date.today()
+        start_date = (pd.Timestamp(end_date) - pd.DateOffset(years=years)).date()
+        history = self.sp500_opportunity_service.cached_history(start_date, end_date)
+        signal = self.sp500_opportunity_alerts_service.detect_latest_signal(history)
+        if signal is None:
+            return []
+
+        thresholds_label = "/".join(f"{value:g}" for value in signal.thresholds)
+        is_buy = signal.action == "BUY"
+        action_label = "compra" if is_buy else "venta/reduccion"
+        basis_label = "cash disponible" if is_buy else "posicion actual"
+        dedupe_key = (
+            f"^GSPC:{signal.event_type}:{signal.signal_date}:{thresholds_label}"
+        )
+        return [
+            {
+                "asset_id": None,
+                "symbol": "^GSPC",
+                "event_type": signal.event_type,
+                "event_payload": {
+                    "severity": "high" if is_buy else "warning",
+                    "title": f"S&P 500 Opportunity · señal de {action_label}",
+                    "message": (
+                        f"El indicador global ha cruzado {thresholds_label}. "
+                        f"La estrategia sugiere aplicar {signal.recommended_pct:g}% "
+                        f"del {basis_label}."
+                    ),
+                    "dedupe_key": dedupe_key,
+                    "material_change": self._material_change(
+                        dedupe_key=dedupe_key,
+                        event_type=signal.event_type,
+                        current_value=signal.score,
+                    ),
+                    "alert_payload": {
+                        "symbol": "^GSPC",
+                        "name": "S&P 500 Index",
+                        "asset_type": "index",
+                        "alert_group": "sp500_opportunity",
+                        "sp500_opportunity_score": signal.score,
+                        "crossed_thresholds": list(signal.thresholds),
+                        "recommended_trade_pct": signal.recommended_pct,
+                        "recommended_trade_basis": basis_label,
+                        "signal_date": str(signal.signal_date),
+                        "strategy_name": "sp500_opportunity_threshold_strategy",
+                        "material_value": signal.score,
+                        "action_suggestion": (
+                            f"Invertir {signal.recommended_pct:g}% del cash disponible"
+                            if is_buy
+                            else (
+                                f"Reducir {signal.recommended_pct:g}% de la posicion "
+                                "actual"
+                            )
+                        ),
+                    },
+                },
+            }
+        ]
+
     def _detect_rsi_cycle_events(
         self,
         *,
@@ -493,8 +571,9 @@ class AlertService:
     ) -> str:
         asset = self.assets_repo.get_by_symbol(event.symbol)
         latest_row = rows_by_symbol.get(event.symbol)
-        if latest_row is None:
+        if latest_row is None and event.asset_id is not None:
             return "deduplicated"
+        latest_row = latest_row or {}
 
         payload = event.event_payload or {}
         dedupe_key = payload["dedupe_key"]
@@ -515,7 +594,11 @@ class AlertService:
             logger.info("%s suppresssed by cooldown for %s", event.event_type, event.symbol)
             return "deduplicated"
 
-        position = self.portfolio_repo.get_by_asset_id(event.asset_id)
+        position = (
+            self.portfolio_repo.get_by_asset_id(event.asset_id)
+            if event.asset_id is not None
+            else None
+        )
         alert_payload = dict(payload["alert_payload"])
         alert_payload["is_portfolio_asset"] = self._has_open_position(position)
         alert = self.alerts_repo.create_alert(

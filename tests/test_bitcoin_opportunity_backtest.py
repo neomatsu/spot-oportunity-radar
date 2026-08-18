@@ -108,3 +108,36 @@ def test_threshold_does_not_repeat_until_cycle_is_rearmed() -> None:
 
     assert result.buy_count == 2
     assert result.events["trigger_thresholds"].tolist() == ["70", "70"]
+
+
+def test_available_cash_sizing_reinvests_sale_proceeds_proportionally() -> None:
+    history = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=8, freq="D"),
+            "overall_score": [50, 71, 71, 29, 29, 50, 71, 71],
+            "bitcoin_price": [100, 100, 100, 160, 160, 100, 100, 100],
+        }
+    )
+    config = BitcoinOpportunityBacktestConfig(
+        initial_capital=100_000,
+        buy_sizing_basis="available_cash",
+        buy_capital_pcts=(0.50, 0.0, 0.0),
+        sell_position_pcts=(0.0, 0.0, 0.50),
+        commission_bps=0,
+        slippage_bps=0,
+    )
+
+    result = BitcoinOpportunityBacktester().run(history, config)
+    events = result.events.reset_index(drop=True)
+
+    assert events.loc[0, "gross_value"] == pytest.approx(50_000)
+    assert events.loc[1, "gross_value"] == pytest.approx(40_000)
+    assert events.loc[2, "sizing_base"] == pytest.approx(90_000)
+    assert events.loc[2, "gross_value"] == pytest.approx(45_000)
+    assert events.loc[2, "cash_after"] == pytest.approx(45_000)
+    assert events.loc[2, "sizing_basis"] == "available_cash"
+
+
+def test_rejects_unknown_buy_sizing_basis() -> None:
+    with pytest.raises(ValueError, match="buy_sizing_basis"):
+        BitcoinOpportunityBacktestConfig(buy_sizing_basis="portfolio_equity")

@@ -293,6 +293,24 @@ class BitcoinOpportunityHistoryORM(Base):
     source_version: Mapped[str] = mapped_column(String(80), index=True)
 
 
+class SP500OpportunityHistoryORM(Base):
+    __tablename__ = "sp500_opportunity_history"
+    __table_args__ = (
+        UniqueConstraint("date", "source_version", name="uq_sp500_opportunity_date_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    classification: Mapped[str] = mapped_column(String(40), index=True)
+    available_components: Mapped[int] = mapped_column(default=0)
+    sp500_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    components_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    data_quality_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    source_version: Mapped[str] = mapped_column(String(80), index=True)
+
+
 class AppConfigORM(Base):
     __tablename__ = "app_config"
 

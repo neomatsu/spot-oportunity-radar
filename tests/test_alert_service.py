@@ -12,6 +12,7 @@ from data.database import (
 )
 from data.repositories.alerts_repo import AlertsRepository
 from data.repositories.bitcoin_opportunity_repo import BitcoinOpportunityRepository
+from data.repositories.sp500_opportunity_repo import SP500OpportunityRepository
 from data.repositories.trade_intents_repo import TradeIntentsRepository
 from services.alert_service import AlertService
 from services.notification_service import NotificationResult
@@ -523,3 +524,36 @@ def test_bitcoin_opportunity_crossing_creates_actionable_alert(db_session) -> No
     assert summary.alerts_created >= 1
     assert alert.payload_json["crossed_thresholds"] == [70.0]
     assert alert.payload_json["recommended_trade_pct"] == 10.0
+
+
+def test_sp500_opportunity_crossing_creates_global_alert(db_session) -> None:
+    today = date.today()
+    SP500OpportunityRepository(db_session).upsert_many(
+        [
+            {
+                "date": today - timedelta(days=1),
+                "overall_score": 59.0,
+                "classification": "NEUTRAL",
+                "available_components": 6,
+                "sp500_price": 7_600,
+            },
+            {
+                "date": today,
+                "overall_score": 63.0,
+                "classification": "OPORTUNIDAD",
+                "available_components": 6,
+                "sp500_price": 7_650,
+            },
+        ],
+        source_version="sp500_opportunity_v5_rolling_calibration",
+    )
+
+    summary = AlertService(db_session).scan_market_events()
+    alerts = AlertsRepository(db_session).list_recent()
+    alert = next(item for item in alerts if item.alert_type == "sp500_opportunity_buy")
+
+    assert summary.alerts_created >= 1
+    assert alert.asset_id is None
+    assert alert.symbol == "^GSPC"
+    assert alert.payload_json["crossed_thresholds"] == [60.0, 62.5]
+    assert alert.payload_json["recommended_trade_pct"] == 100.0

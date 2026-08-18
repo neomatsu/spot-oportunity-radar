@@ -1222,7 +1222,8 @@ se marca como datos insuficientes. El historico se versiona mediante
 la formula.
 
 La misma pagina incluye un backtest long-only por umbrales del indicador. Cada nivel
-de compra utiliza un porcentaje configurable del capital inicial y cada nivel de
+de compra utiliza un porcentaje configurable del capital inicial o del cash
+disponible justo antes de ejecutar la orden, segun `buy_sizing_basis`. Cada nivel de
 venta reduce un porcentaje configurable de la posicion disponible. Las senales se
 ejecutan con el precio del dia siguiente, incluyendo comision y slippage, y cada
 umbral solo puede ejecutarse una vez hasta que el ciclo se rearma. El optimizador
@@ -1231,6 +1232,117 @@ drawdown; no modifica el scoring ni genera ordenes reales.
 
 Liquidez e interes publico son proxies explicables, no medidas institucionales
 directas, y el indicador no pretende predecir suelos de mercado.
+
+## S&P 500 Opportunity Detector
+
+La pagina `S&P 500 Opportunity Detector` incorpora un indicador contrarian
+independiente para evaluar la calidad historica de una acumulacion de medio/largo
+plazo en el S&P 500. No modifica `technical_score`, `risk_score`, recommendations,
+alertas, el job diario ni el detector de Bitcoin.
+
+El score global pondera solamente los componentes disponibles y redistribuye sus
+pesos; un dato ausente nunca se sustituye silenciosamente por un valor neutral. Los
+seis bloques configurables son valoracion, VIX, momentum/tendencia, drawdown,
+amplitud de mercado y macro/liquidez. Formula, pesos, clasificaciones, fuentes,
+lags y parametros viven en `config/sp500_opportunity.yaml`.
+
+La escala global aplica una calibracion temporal posterior a los componentes. Usa
+la media de las cinco anualidades anteriores, sin incluir la sesion actual, centra
+el resultado en `50` y conserva el 80% de la desviacion original. El score compuesto
+sin calibrar y la referencia utilizada se guardan en `data_quality_json`, por lo que
+la transformacion es auditable y no introduce datos futuros.
+
+### Fuentes y cobertura
+
+- Precio: `^GSPC` diario mediante yfinance. Es un indice de precios y no incluye
+  dividendos, por lo que el benchmark infravalora el buy-and-hold total return.
+- Sentimiento: historico oficial VIX de Cboe, disponible desde 1990.
+- Valoracion: componente con peso global del 15%, formado por 50% percentil CAPE
+  historico inverso, 25% percentil CAPE movil de 20 anos inverso y 25% `Excess CAPE
+  Yield` frente al Treasury real a 10 anos (`DFII10`). El CAPE mensual de Robert
+  Shiller/Yale es la base historica y Multpl extiende los meses recientes. El empalme
+  solo se acepta si el solape cumple la tolerancia configurada; GuruFocus queda como
+  comprobacion manual. Antes de que exista `DFII10`, el peso no disponible se
+  redistribuye entre los dos subcomponentes CAPE, sin imputar un valor neutral. El
+  resultado hibrido aplica despues una contraccion configurable del 25% hacia
+  `5/10`, que representa incertidumbre estructural y evita certeza extrema sin
+  alterar el orden relativo de las observaciones.
+- Macro: Effective Federal Funds Rate (`DFF`) de FRED, desplazado un dia para evitar
+  usar el dato antes de su disponibilidad operativa.
+- Breadth: porcentaje sobre SMA200 calculado desde los componentes actuales que ya
+  existan en `cache/sp500_scoring/prices`. Esta aproximacion tiene survivorship bias,
+  se marca como no point-in-time-safe y no descarga 500 series implicitamente.
+
+La cobertura fiable cambia por componente. El score empieza cuando existen al
+menos tres bloques con suficiente historia; la UI muestra tanto los bloques
+ausentes como las sesiones que incluyen fuentes no PIT-safe.
+
+### Historico y analisis
+
+Para reconstruir el historico desde CLI:
+
+```bash
+python -m jobs.run_sp500_opportunity_history --start 1990-01-02
+python -m jobs.run_sp500_opportunity_history --start 1990-01-02 --forward-returns
+python -m jobs.run_sp500_opportunity_history --start 1990-01-02 --force
+```
+
+La primera ejecucion descarga y guarda fuentes en `cache/sp500_opportunity`; las
+siguientes leen cache y SQLite. Los scores diarios se persisten versionados en
+`sp500_opportunity_history`. `--force` debe reservarse para renovar las fuentes o
+tras un cambio controlado de metodologia.
+
+`Forward Returns Analysis` calcula retornos y maximum adverse excursion a 3, 6,
+12, 24, 36 y 60 meses por bandas de score. Las ventanas se solapan y, por tanto,
+sus observaciones no son estadisticamente independientes; el analisis sirve para
+comprobar ordenacion y monotonicidad, no como test de significancia aislado.
+
+El backtest reutiliza la ejecucion auditada del detector de Bitcoin: una senal
+calculada al cierre de D se ejecuta en la siguiente sesion disponible D+1, con
+comision y slippage. Incluye CAGR, drawdown, Sharpe, Sortino, Calmar, exposicion,
+cash y turnover, junto con sensibilidad de parametros y split in-sample /
+out-of-sample. La arquitectura tambien expone walk-forward para estudios posteriores.
+La opcion `buy_sizing_basis: available_cash` hace que las ventas repongan el cash y
+que las compras posteriores apliquen su porcentaje sobre ese nuevo saldo; el modo
+`initial_capital` conserva la semantica de los estudios historicos anteriores.
+
+El job diario actualiza tambien el historico reciente del detector antes de escanear
+alertas. Los cruces configurados en `sp500_opportunity.yaml > alerts` generan eventos
+globales `sp500_opportunity_buy` y `sp500_opportunity_sell` bajo el simbolo `^GSPC`,
+sin asociarlos artificialmente a un ETF. Los tipos habilitados para Telegram siguen
+controlados por `config/notifications.yaml`; el perfil inicial alerta compras en
+`60 / 62.5 / 77.5` y una reduccion defensiva solo al cruzar `25` hacia abajo.
+
+El estudio amplio y reanudable se configura en
+`config/sp500_opportunity_study.yaml` y se ejecuta con:
+
+```bash
+python -m jobs.run_sp500_opportunity_optimization_study --workers 4
+python -m jobs.run_sp500_opportunity_optimization_study --workers 4 --max-runs 500
+python -m jobs.run_sp500_opportunity_optimization_study --restart --workers 4
+```
+
+Cada fase escribe checkpoints atomicos en
+`reports/sp500_opportunity_optimization/`. Una nueva ejecucion con la misma
+configuracion continua automaticamente y omite los `config_id` ya terminados.
+`--max-runs` limita las nuevas evaluaciones de la fase activa y permite smoke tests;
+`--restart` elimina exclusivamente los checkpoints de este estudio. Si cambia el
+YAML, el hash impide mezclar resultados incompatibles y exige reiniciar de forma
+explicita.
+
+### Limitaciones metodologicas
+
+- CAPE historico no garantiza valores sin revisiones tal como fueron publicados.
+- Breadth basado en constituyentes actuales introduce survivorship bias.
+- Los datos macro revisables requieren vintages ALFRED para una validacion PIT mas
+  estricta; el MVP usa DFF diario con lag y declara esta simplificacion.
+- El Treasury real `DFII10` comienza en 2003 y se consume con un dia de lag. La
+  descarga FRED actual no es un vintage ALFRED, por lo que tampoco se considera
+  estrictamente point-in-time-safe.
+- Los percentiles son expansivos: cada fecha usa solo observaciones disponibles
+  hasta ese momento y no percentiles calculados con todo el futuro.
+- Optimizar y evaluar en el mismo periodo sobreestima resultados. Deben priorizarse
+  train/test, walk-forward y mesetas de sensibilidad frente al mejor punto unico.
 
 ## Tests y lint
 

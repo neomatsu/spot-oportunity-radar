@@ -9,6 +9,7 @@ import pandas as pd
 @dataclass(frozen=True)
 class BitcoinOpportunityBacktestConfig:
     initial_capital: float = 100_000.0
+    buy_sizing_basis: str = "initial_capital"
     buy_thresholds: tuple[float, float, float] = (70.0, 75.0, 80.0)
     buy_capital_pcts: tuple[float, float, float] = (0.10, 0.15, 0.25)
     sell_thresholds: tuple[float, float, float] = (20.0, 25.0, 30.0)
@@ -22,6 +23,10 @@ class BitcoinOpportunityBacktestConfig:
     def __post_init__(self) -> None:
         if self.initial_capital <= 0:
             raise ValueError("initial_capital must be positive")
+        if self.buy_sizing_basis not in {"initial_capital", "available_cash"}:
+            raise ValueError(
+                "buy_sizing_basis must be 'initial_capital' or 'available_cash'"
+            )
         if tuple(sorted(self.buy_thresholds)) != self.buy_thresholds:
             raise ValueError("buy_thresholds must be ascending")
         if tuple(sorted(self.sell_thresholds)) != self.sell_thresholds:
@@ -211,6 +216,7 @@ class BitcoinOpportunityBacktester:
             for sell_profile in sell_profiles:
                 config = BitcoinOpportunityBacktestConfig(
                     initial_capital=base_config.initial_capital,
+                    buy_sizing_basis=base_config.buy_sizing_basis,
                     buy_thresholds=base_config.buy_thresholds,
                     buy_capital_pcts=buy_profile,
                     sell_thresholds=base_config.sell_thresholds,
@@ -275,6 +281,7 @@ class BitcoinOpportunityBacktester:
             for sell_thresholds in combinations(sell_values, 3):
                 config = BitcoinOpportunityBacktestConfig(
                     initial_capital=base_config.initial_capital,
+                    buy_sizing_basis=base_config.buy_sizing_basis,
                     buy_thresholds=buy_thresholds,
                     buy_capital_pcts=base_config.buy_capital_pcts,
                     sell_thresholds=sell_thresholds,
@@ -346,7 +353,12 @@ class BitcoinOpportunityBacktester:
 
         if action == "BUY":
             execution_price = market_price * (1 + slippage_rate)
-            requested = config.initial_capital * fraction
+            sizing_base = (
+                cash
+                if config.buy_sizing_basis == "available_cash"
+                else config.initial_capital
+            )
+            requested = sizing_base * fraction
             gross_value = min(requested, cash / (1 + commission_rate))
             if gross_value < config.minimum_trade_value:
                 return cash, quantity, cost_basis, 0.0, None
@@ -358,6 +370,7 @@ class BitcoinOpportunityBacktester:
             quantity += traded_quantity
             cost_basis += gross_value + fee
         else:
+            sizing_base = quantity
             execution_price = market_price * (1 - slippage_rate)
             traded_quantity = quantity * fraction
             gross_value = traded_quantity * execution_price
@@ -383,6 +396,10 @@ class BitcoinOpportunityBacktester:
             ),
             "signal_score": pending["signal_score"],
             "applied_pct": fraction * 100,
+            "sizing_basis": (
+                config.buy_sizing_basis if action == "BUY" else "current_position"
+            ),
+            "sizing_base": sizing_base,
             "price": execution_price,
             "quantity": traded_quantity,
             "gross_value": gross_value,
