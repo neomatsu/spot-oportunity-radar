@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from data.database import AssetORM
 from data.repositories.portfolio_repo import PortfolioRepository
 from services.broker_import_service import (
     BrokerImportService,
+    KrakenCsvParser,
     TradeRepublicCsvParser,
 )
 
@@ -100,3 +102,75 @@ def test_unmapped_asset_is_not_imported(db_session) -> None:
     assert summary.imported == 0
     assert summary.unmapped == 1
     assert PortfolioRepository(db_session).list_transactions() == []
+
+
+KRAKEN_CSV = """txid,pair,time,type,ordertype,price,cost,fee,vol,margin
+buy-1,BTC/USDC,2026-08-01 10:00:00,buy,limit,60000,1200,2.64,0.02,0
+buy-2,BTC/USDC,2026-08-02 10:00:00,buy,limit,65000,650,1.43,0.01,0
+sell-1,BTC/USDC,2026-08-03 10:00:00,sell,limit,70000,350,0.77,0.005,0
+"""
+
+
+def _seed_bitcoin(db_session) -> AssetORM:
+    bitcoin = AssetORM(
+        symbol="BTCUSDT",
+        name="Bitcoin",
+        asset_type="crypto",
+        sector="Crypto",
+        region="Global",
+        enabled=True,
+        supports_fundamentals=False,
+    )
+    db_session.add(bitcoin)
+    db_session.flush()
+    return bitcoin
+
+
+def test_kraken_parser_normalizes_spot_rows() -> None:
+    rows = KrakenCsvParser().parse(KRAKEN_CSV)
+
+    assert len(rows) == 3
+    assert rows[0].external_source == "kraken"
+    assert rows[0].external_asset_id == "BTC"
+    assert rows[0].currency == "USDC"
+    assert rows[0].quantity == pytest.approx(0.02)
+    assert rows[-1].transaction_type == "SELL"
+    assert rows[-1].external_transaction_id == "sell-1"
+
+
+def test_import_kraken_converts_to_eur_accumulates_and_deduplicates(db_session) -> None:
+    bitcoin = _seed_bitcoin(db_session)
+    service = BrokerImportService(db_session)
+    service.currency_service.loader = lambda _currency, as_of: pd.DataFrame(
+        {"date": [as_of], "rate": [0.9]}
+    )
+    rows = service.parse_kraken(KRAKEN_CSV)
+
+    assert service.resolve_asset_ids(rows) == {"BTC": bitcoin.id}
+    first = service.import_kraken(rows)
+    second = service.import_kraken(rows)
+
+    assert first.imported == 3
+    assert first.invalid == 0
+    assert second.imported == 0
+    assert second.duplicates == 3
+    repo = PortfolioRepository(db_session)
+    position = repo.get_by_asset_id(bitcoin.id)
+    assert position is not None
+    assert position.quantity == pytest.approx(0.025)
+    assert position.avg_cost == pytest.approx(((1200 + 2.64) + (650 + 1.43)) * 0.9 / 0.03)
+    transactions = repo.list_transactions(asset_id=bitcoin.id)
+    assert len(transactions) == 3
+    assert transactions[0].transaction_currency == "EUR"
+    assert transactions[0].price == pytest.approx(54_000)
+    conversion = transactions[0].external_payload_json["_import_conversion"]
+    assert conversion["original_currency"] == "USDC"
+    assert conversion["stablecoin_parity_assumption"] is True
+    assert conversion["rate"] == pytest.approx(0.9)
+
+
+def test_kraken_margin_trade_is_rejected() -> None:
+    content = KRAKEN_CSV.replace(",0\n", ",100\n", 1)
+
+    with pytest.raises(ValueError, match="margen"):
+        KrakenCsvParser().parse(content)

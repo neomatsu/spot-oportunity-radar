@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -201,6 +202,44 @@ def test_expanding_percentiles_do_not_change_when_future_is_added(db_session) ->
     after = second.loc[pd.to_datetime(second["date"]) == "2021-06-30", "overall_score"].iloc[0]
 
     assert after == reference
+
+
+def test_refresh_current_uses_recent_incremental_path(db_session) -> None:
+    service = SP500OpportunityService(
+        db_session,
+        config=_config(),
+        now=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+    expected = pd.DataFrame({"date": [date(2026, 8, 19)]})
+    service._refresh_breadth_price_cache = Mock()
+    service.update_history = Mock(return_value=expected)
+
+    result = service.refresh_current()
+
+    assert result is expected
+    service._refresh_breadth_price_cache.assert_called_once_with()
+    service.update_history.assert_called_once_with(
+        date(2026, 8, 10), date(2026, 8, 20), force=True
+    )
+
+
+def test_refresh_current_force_rebuilds_configured_range(db_session) -> None:
+    service = SP500OpportunityService(
+        db_session,
+        config=_config(),
+        now=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+    expected = pd.DataFrame({"date": [date(2026, 8, 19)]})
+    service._refresh_breadth_price_cache = Mock()
+    service.update_history = Mock(return_value=expected)
+
+    result = service.refresh_current(force_sources=True)
+
+    assert result is expected
+    service._refresh_breadth_price_cache.assert_called_once_with()
+    service.update_history.assert_called_once_with(
+        date(2020, 1, 1), date(2026, 8, 20), force=True
+    )
 
 
 def test_stale_component_is_not_forward_filled_indefinitely() -> None:

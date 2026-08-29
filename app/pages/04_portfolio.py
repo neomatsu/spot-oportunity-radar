@@ -30,6 +30,114 @@ def _money(value: float | None) -> str:
     return f"{value:,.2f}"
 
 
+def _render_new_transaction(asset_symbols: list[str], symbol_to_asset: dict) -> None:
+    st.caption(
+        "Entrada manual de respaldo. Para el uso habitual se recomienda importar las "
+        "operaciones desde Trade Republic o Kraken."
+    )
+    tx_col1, tx_col2 = st.columns(2)
+    selected_symbol = tx_col1.selectbox("Activo", asset_symbols)
+    transaction_type = tx_col2.selectbox("Tipo de movimiento", ["BUY", "SELL"])
+    selected_asset = symbol_to_asset[selected_symbol]
+
+    date_col, mode_col = st.columns(2)
+    transaction_date = date_col.date_input("Fecha", value=pd.Timestamp.today().date())
+    input_mode = mode_col.radio(
+        "Modo de entrada",
+        ["Importe", "Unidades"],
+        horizontal=True,
+    )
+
+    with session_scope() as session:
+        transaction_service = PortfolioService(session)
+        estimated_price, price_source, price_date = transaction_service.price_for_date(
+            selected_asset.id,
+            transaction_date,
+        )
+        available_quantity = transaction_service.available_quantity(selected_asset.id)
+
+    if estimated_price is None:
+        st.warning("No hay precio historico para esa fecha. Introduce el precio manualmente.")
+    else:
+        st.info(
+            f"Precio sugerido: {_money(estimated_price)} "
+            f"({price_source}, fecha usada: {price_date})"
+        )
+
+    with st.form("portfolio_transaction_form"):
+        sell_all = False
+        if transaction_type == "SELL":
+            sell_all = st.checkbox(
+                "Vender toda la posicion disponible",
+                value=False,
+                help=f"Unidades disponibles: {available_quantity:.6f}",
+            )
+        form_col1, form_col2, form_col3 = st.columns(3)
+        price = form_col1.number_input(
+            "Precio aplicado",
+            min_value=0.0,
+            value=float(estimated_price or 0.0),
+            step=0.01,
+            help="Puedes editarlo para reflejar el precio exacto de la operacion.",
+        )
+        gross_amount = None
+        quantity = None
+        if input_mode == "Importe":
+            gross_amount = form_col2.number_input(
+                "Importe bruto",
+                min_value=0.0,
+                value=(available_quantity * price if sell_all and price > 0 else 0.0),
+                step=100.0,
+                disabled=sell_all,
+            )
+            calculated_quantity = (
+                available_quantity if sell_all else gross_amount / price if price > 0 else 0.0
+            )
+            form_col3.metric("Unidades calculadas", f"{calculated_quantity:.6f}")
+        else:
+            quantity = form_col2.number_input(
+                "Unidades",
+                min_value=0.0,
+                value=available_quantity if sell_all else 0.0,
+                step=0.01,
+                disabled=sell_all,
+            )
+            calculated_amount = quantity * price
+            form_col3.metric("Importe calculado", _money(calculated_amount))
+
+        fees = st.number_input("Comisiones", min_value=0.0, value=0.0, step=1.0)
+        notes = st.text_input("Notas", value="")
+        submitted = st.form_submit_button("Guardar movimiento", type="primary")
+
+        if submitted:
+            try:
+                with session_scope() as session:
+                    service = PortfolioService(session)
+                    service.add_transaction_and_recalculate(
+                        asset_id=selected_asset.id,
+                        transaction_type=transaction_type,
+                        transaction_date=transaction_date,
+                        quantity=(
+                            available_quantity
+                            if sell_all
+                            else quantity if input_mode == "Unidades" else None
+                        ),
+                        gross_amount=(
+                            None
+                            if sell_all
+                            else gross_amount if input_mode == "Importe" else None
+                        ),
+                        price=price,
+                        fees=fees,
+                        price_source=price_source if estimated_price is not None else "manual",
+                        notes=notes or None,
+                    )
+                st.success("Movimiento guardado y cartera recalculada.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+
 with session_scope() as session:
     assets = AssetsRepository(session).list_enabled()
     portfolio_service = PortfolioService(session)
@@ -147,112 +255,107 @@ with st.expander("Importar operaciones de Trade Republic", expanded=False):
         except ValueError as exc:
             st.error(str(exc))
 
+with st.expander("Importar operaciones spot de Kraken", expanded=False):
+    st.caption(
+        "Se importan ejecuciones BUY/SELL del historial de trades spot. `txid` evita "
+        "duplicados y los importes USDC/USDT se convierten a EUR usando el cambio "
+        "USD/EUR de la fecha, asumiendo paridad 1:1 con USD."
+    )
+    kraken_file = st.file_uploader(
+        "CSV de historial de operaciones de Kraken",
+        type=["csv"],
+        key="kraken_spot_csv",
+    )
+    if kraken_file is not None:
+        try:
+            csv_content = kraken_file.getvalue()
+            with session_scope() as session:
+                import_service = BrokerImportService(session)
+                broker_transactions = import_service.parse_kraken(csv_content)
+                resolved_asset_ids = import_service.resolve_asset_ids(broker_transactions)
+                duplicate_ids = import_service.duplicate_transaction_ids(
+                    broker_transactions
+                )
+
+            if not broker_transactions:
+                st.warning("El fichero no contiene operaciones spot BUY/SELL.")
+            else:
+                asset_id_to_symbol = {asset.id: asset.symbol for asset in assets}
+                external_assets = {
+                    item.external_asset_id: item for item in broker_transactions
+                }
+                selected_mappings: dict[str, int] = {}
+                st.markdown("**Mapeo de criptoactivos**")
+                for external_id, item in external_assets.items():
+                    mapped_asset_id = resolved_asset_ids.get(external_id)
+                    mapped_symbol = asset_id_to_symbol.get(mapped_asset_id or -1)
+                    if mapped_symbol:
+                        st.success(f"{external_id} · {item.external_name} → {mapped_symbol}")
+                        selected_mappings[external_id] = mapped_asset_id  # type: ignore[assignment]
+                        continue
+                    selected_symbol = st.selectbox(
+                        f"{external_id} · {item.external_name}",
+                        options=[""] + asset_symbols,
+                        format_func=lambda value: value
+                        or "Sin mapear (omitir operaciones)",
+                        key=f"kraken_mapping_{external_id}",
+                    )
+                    if selected_symbol:
+                        selected_mappings[external_id] = symbol_to_asset[
+                            selected_symbol
+                        ].id
+
+                preview_rows = []
+                for item in broker_transactions:
+                    mapped_id = selected_mappings.get(item.external_asset_id)
+                    if item.external_transaction_id in duplicate_ids:
+                        status = "Duplicada"
+                    elif mapped_id is None:
+                        status = "Sin mapear"
+                    else:
+                        status = "Lista para importar y convertir a EUR"
+                    preview_rows.append(
+                        {
+                            "Fecha UTC": item.occurred_at,
+                            "Tipo": item.transaction_type,
+                            "Par": item.external_name,
+                            "Activo": asset_id_to_symbol.get(mapped_id or -1, "N/A"),
+                            "Unidades": item.quantity,
+                            "Precio original": item.price,
+                            "Importe original": item.gross_amount,
+                            "Comisión original": item.fees,
+                            "Divisa": item.currency,
+                            "Estado": status,
+                            "TxID": item.external_transaction_id,
+                        }
+                    )
+                st.dataframe(
+                    pd.DataFrame(preview_rows),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+                if st.button("Confirmar importación Kraken", type="primary"):
+                    with session_scope() as session:
+                        summary = BrokerImportService(session).import_kraken(
+                            broker_transactions,
+                            manual_mappings=selected_mappings,
+                        )
+                    st.success(
+                        f"Importadas: {summary.imported} · Duplicadas: "
+                        f"{summary.duplicates} · Sin mapear: {summary.unmapped} · "
+                        f"Inválidas: {summary.invalid}"
+                    )
+                    for error in summary.errors:
+                        st.warning(error)
+                    if summary.imported:
+                        st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
 if not asset_symbols:
     st.info("No hay activos habilitados.")
     st.stop()
-
-st.subheader("Nuevo movimiento")
-tx_col1, tx_col2 = st.columns(2)
-selected_symbol = tx_col1.selectbox("Activo", asset_symbols)
-transaction_type = tx_col2.selectbox("Tipo de movimiento", ["BUY", "SELL"])
-selected_asset = symbol_to_asset[selected_symbol]
-
-date_col, mode_col = st.columns(2)
-transaction_date = date_col.date_input("Fecha", value=pd.Timestamp.today().date())
-input_mode = mode_col.radio(
-    "Modo de entrada",
-    ["Importe", "Unidades"],
-    horizontal=True,
-)
-
-with session_scope() as session:
-    transaction_service = PortfolioService(session)
-    estimated_price, price_source, price_date = transaction_service.price_for_date(
-        selected_asset.id,
-        transaction_date,
-    )
-    available_quantity = transaction_service.available_quantity(selected_asset.id)
-
-if estimated_price is None:
-    st.warning("No hay precio historico para esa fecha. Introduce el precio manualmente.")
-else:
-    st.info(
-        f"Precio sugerido: {_money(estimated_price)} "
-        f"({price_source}, fecha usada: {price_date})"
-    )
-
-with st.form("portfolio_transaction_form"):
-    sell_all = False
-    if transaction_type == "SELL":
-        sell_all = st.checkbox(
-            "Vender toda la posicion disponible",
-            value=False,
-            help=f"Unidades disponibles: {available_quantity:.6f}",
-        )
-    form_col1, form_col2, form_col3 = st.columns(3)
-    price = form_col1.number_input(
-        "Precio aplicado",
-        min_value=0.0,
-        value=float(estimated_price or 0.0),
-        step=0.01,
-        help="Puedes editarlo para reflejar el precio exacto de la operacion.",
-    )
-    gross_amount = None
-    quantity = None
-    if input_mode == "Importe":
-        gross_amount = form_col2.number_input(
-            "Importe bruto",
-            min_value=0.0,
-            value=(available_quantity * price if sell_all and price > 0 else 0.0),
-            step=100.0,
-            disabled=sell_all,
-        )
-        calculated_quantity = (
-            available_quantity if sell_all else gross_amount / price if price > 0 else 0.0
-        )
-        form_col3.metric("Unidades calculadas", f"{calculated_quantity:.6f}")
-    else:
-        quantity = form_col2.number_input(
-            "Unidades",
-            min_value=0.0,
-            value=available_quantity if sell_all else 0.0,
-            step=0.01,
-            disabled=sell_all,
-        )
-        calculated_amount = quantity * price
-        form_col3.metric("Importe calculado", _money(calculated_amount))
-
-    fees = st.number_input("Comisiones", min_value=0.0, value=0.0, step=1.0)
-    notes = st.text_input("Notas", value="")
-    submitted = st.form_submit_button("Guardar movimiento", type="primary")
-
-    if submitted:
-        try:
-            with session_scope() as session:
-                service = PortfolioService(session)
-                service.add_transaction_and_recalculate(
-                    asset_id=selected_asset.id,
-                    transaction_type=transaction_type,
-                    transaction_date=transaction_date,
-                    quantity=(
-                        available_quantity
-                        if sell_all
-                        else quantity if input_mode == "Unidades" else None
-                    ),
-                    gross_amount=(
-                        None
-                        if sell_all
-                        else gross_amount if input_mode == "Importe" else None
-                    ),
-                    price=price,
-                    fees=fees,
-                    price_source=price_source if estimated_price is not None else "manual",
-                    notes=notes or None,
-                )
-            st.success("Movimiento guardado y cartera recalculada.")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
 
 with session_scope() as session:
     service = PortfolioService(session)
@@ -276,6 +379,12 @@ else:
     largest_position = float(positions_df["current_weight"].max())
 cash_value = total_capital - invested_cost if total_capital > 0 else 0.0
 
+with session_scope() as session:
+    liquidity_plan = PortfolioService(session).planned_cash_reserve(
+        total_capital=total_capital,
+        estimated_cash=cash_value,
+    )
+
 summary_cols = st.columns(6)
 summary_cols[0].metric("Capital total", _money(total_capital))
 summary_cols[1].metric("Coste invertido", _money(invested_cost))
@@ -283,6 +392,79 @@ summary_cols[2].metric("Valor actual", _money(market_value))
 summary_cols[3].metric("Cash estimado", _money(cash_value))
 summary_cols[4].metric("Peso actual", f"{exposure.total_invested_weight * 100:.1f}%")
 summary_cols[5].metric("Mayor posicion", f"{largest_position * 100:.1f}%")
+
+st.markdown("#### Liquidez planificada")
+liquidity_cols = st.columns(4)
+liquidity_cols[0].metric(
+    "Compromiso solicitado",
+    _money(liquidity_plan.requested_commitment),
+    help="Suma del capital nominal o porcentaje sugerido de los planes activos.",
+)
+liquidity_cols[1].metric(
+    "Cash reservado",
+    _money(liquidity_plan.effective_reserved),
+    help="Parte del cash estimado que puede cubrir los planes de compra vigentes.",
+)
+liquidity_cols[2].metric(
+    "Cash completamente libre",
+    _money(liquidity_plan.free_cash),
+    help="Cash estimado que queda después de reservar los planes vigentes.",
+)
+liquidity_cols[3].metric(
+    "Déficit de reserva",
+    _money(liquidity_plan.reserve_deficit),
+    help="Capital comprometido por los planes que no está cubierto por el cash estimado.",
+)
+st.caption(
+    "La reserva es una capa de planificación: no bloquea dinero en el broker. "
+    "Incluye niveles activos y disparados aún no ejecutados; excluye pausados, "
+    "expirados y ejecutados."
+)
+if liquidity_plan.reserve_deficit > 0:
+    st.warning(
+        "Los planes de compra superan el cash estimado en "
+        f"{_money(liquidity_plan.reserve_deficit)}. Revisa importes, porcentajes o prioridades."
+    )
+
+with st.expander(
+    f"Reserva para compras planificadas ({len(liquidity_plan.reservations)} niveles)",
+    expanded=False,
+):
+    if not liquidity_plan.reservations:
+        st.info("No hay niveles de compra activos con reserva asociada.")
+    else:
+        reservation_rows = [
+            {
+                "Símbolo": item.symbol,
+                "Estado": item.status,
+                "Precio objetivo": item.target_price,
+                "Divisa": item.price_currency or "N/A",
+                "Precio actual": item.current_price,
+                "Distancia": item.distance_pct,
+                "% capital": item.suggested_weight_pct,
+                "Capital nominal": item.suggested_capital,
+                "Reserva solicitada": item.requested_capital,
+                "Cálculo": {
+                    "capital_nominal": "Capital nominal",
+                    "porcentaje_capital": "% del capital total",
+                    "sin_asignacion": "Sin asignación",
+                }[item.calculation_basis],
+            }
+            for item in liquidity_plan.reservations
+        ]
+        st.dataframe(
+            pd.DataFrame(reservation_rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Precio objetivo": st.column_config.NumberColumn(format="%.4f"),
+                "Precio actual": st.column_config.NumberColumn(format="%.4f"),
+                "Distancia": st.column_config.NumberColumn(format="%.2f%%"),
+                "% capital": st.column_config.NumberColumn(format="%.2f%%"),
+                "Capital nominal": st.column_config.NumberColumn(format="%.2f €"),
+                "Reserva solicitada": st.column_config.NumberColumn(format="%.2f €"),
+            },
+        )
 
 if positions_df.empty:
     st.info("No hay posiciones agregadas. Anade compras para construir la cartera.")
@@ -388,6 +570,9 @@ else:
             px.bar(type_df, x="asset_type", y="weight", color="asset_type", title="Por clase"),
             use_container_width=True,
         )
+
+with st.expander("Nuevo movimiento", expanded=False):
+    _render_new_transaction(asset_symbols, symbol_to_asset)
 
 st.subheader("Movimientos")
 if transactions_df.empty:

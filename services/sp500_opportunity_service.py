@@ -23,6 +23,7 @@ from opportunity_detectors.base import (
     classify_score,
     weighted_available_score,
 )
+from services.sp500_scoring_service import SP500ScoringService
 
 FrameLoader = Callable[[date, date], pd.DataFrame]
 logger = get_logger(__name__)
@@ -71,6 +72,7 @@ class SP500OpportunityService:
         real_yield_loader: FrameLoader | None = None,
         breadth_loader: FrameLoader | None = None,
         macro_loader: FrameLoader | None = None,
+        breadth_market_service: SP500ScoringService | None = None,
         http_client: httpx.Client | None = None,
         now: datetime | None = None,
     ) -> None:
@@ -83,6 +85,7 @@ class SP500OpportunityService:
         self.real_yield_loader = real_yield_loader
         self.breadth_loader = breadth_loader
         self.macro_loader = macro_loader
+        self.breadth_market_service = breadth_market_service
         self.http_client = http_client
         self.now = now or datetime.now(UTC)
         self.root_dir = get_settings().root_dir
@@ -117,7 +120,37 @@ class SP500OpportunityService:
             latest_date = pd.to_datetime(cached["date"]).max().date()
             if latest_date >= expected_session:
                 return cached
+        self._refresh_breadth_price_cache()
         return self.update_history(start_date, end_date, force=True)
+
+    def refresh_current(self, *, force_sources: bool = False) -> pd.DataFrame:
+        """Refresh recent sessions, or rebuild the configured range on demand."""
+        self._refresh_breadth_price_cache()
+        if not force_sources:
+            end_date = self.now.date()
+            start_date = end_date - timedelta(days=10)
+            return self.update_history(start_date, end_date, force=True)
+
+        start_date = pd.Timestamp(
+            self.config.get("history", {}).get("default_start_date", "1990-01-02")
+        ).date()
+        return self.update_history(start_date, self.now.date(), force=True)
+
+    def _refresh_breadth_price_cache(self) -> None:
+        if not self.config.get("breadth", {}).get("enabled", True):
+            return
+        if self.breadth_loader is not None:
+            return
+        service = self.breadth_market_service or SP500ScoringService(now=self.now)
+        summary = service.refresh_price_cache_incremental()
+        logger.info(
+            "S&P 500 breadth inputs: target=%s total=%s current=%s refreshed=%s failed=%s",
+            summary.target_session,
+            summary.symbols_total,
+            summary.symbols_current,
+            summary.symbols_refreshed,
+            summary.symbols_failed,
+        )
 
     def compute(self) -> SP500OpportunityReport:
         history_cfg = self.config.get("history", {})

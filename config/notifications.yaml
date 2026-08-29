@@ -5,7 +5,6 @@ channels:
   email: false
 
 telegram:
-  portfolio_assets_allow_all_alert_types: true
   enabled_for:
     - info
     - warning

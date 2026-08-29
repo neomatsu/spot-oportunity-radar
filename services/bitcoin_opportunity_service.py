@@ -17,6 +17,7 @@ from data.repositories.assets_repo import AssetsRepository
 from data.repositories.bitcoin_opportunity_repo import BitcoinOpportunityRepository
 from data.repositories.data_status_repo import AssetDataStatusRepository
 from data.repositories.prices_repo import PricesRepository
+from services.market_data_service import MarketDataService, PriceRefreshResult
 from services.technical_service import TechnicalService
 
 
@@ -79,6 +80,7 @@ class BitcoinOpportunityService:
         dxy_history_loader: Callable[[date, date], pd.DataFrame] | None = None,
         bitcoin_history_loader: Callable[[AssetORM, date, date], pd.DataFrame]
         | None = None,
+        market_data_service: MarketDataService | None = None,
         now: datetime | None = None,
     ) -> None:
         self.session = session
@@ -95,6 +97,7 @@ class BitcoinOpportunityService:
         self.data_status_repo = AssetDataStatusRepository(session)
         self.history_repo = BitcoinOpportunityRepository(session)
         self.technical_service = TechnicalService()
+        self.market_data_service = market_data_service or MarketDataService(session)
 
     @property
     def history_source_version(self) -> str:
@@ -176,6 +179,18 @@ class BitcoinOpportunityService:
             return pd.DataFrame()
         start_date = latest_date - timedelta(days=max(1, lookback_days))
         return self.update_history(start_date, latest_date)
+
+    def refresh_market_data(self) -> PriceRefreshResult:
+        """Force a BTC refresh before rebuilding the latest opportunity readings."""
+        symbol = str(self.config.get("bitcoin_symbol", "BTCUSDT"))
+        asset = self.assets_repo.get_by_symbol(symbol)
+        if asset is None:
+            raise ValueError(f"Bitcoin asset {symbol} is not configured.")
+
+        result = self.market_data_service.refresh_daily_prices(asset, force=True)
+        if result.status == "refreshed":
+            self.update_latest_history()
+        return result
 
     def _ensure_bitcoin_price_history(self, start_date: date, end_date: date) -> int:
         """Backfill only the missing prefix required by the requested score range."""

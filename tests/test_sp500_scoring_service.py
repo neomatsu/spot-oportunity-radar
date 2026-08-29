@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -91,6 +92,108 @@ def test_price_cache_is_reused_without_downloading(tmp_path: Path) -> None:
     assert hits == 1
     assert errors == []
     assert len(frames["MSFT"]) == 300
+
+
+def test_incremental_refresh_only_downloads_stale_symbols(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    constituents = pd.DataFrame(
+        {
+            "Symbol": ["MSFT", "AAPL"],
+            "Security": ["Microsoft", "Apple"],
+            "GICS Sector": ["Technology", "Technology"],
+        }
+    )
+    constituents.to_csv(tmp_path / "constituents.csv", index=False)
+    stale = _price_frame(220)
+    stale["date"] = pd.bdate_range(end="2026-08-18", periods=len(stale))
+    current = stale.copy()
+    current.loc[current.index[-1], "date"] = pd.Timestamp("2026-08-19")
+    service._write_price_cache("MSFT", stale)
+    service._write_price_cache("AAPL", current)
+    recent = stale.tail(1).copy()
+    recent["date"] = pd.Timestamp("2026-08-19")
+    service._download_batch_range = Mock(return_value={"MSFT": recent})
+
+    result = service.refresh_price_cache_incremental()
+
+    assert result.target_session == date(2026, 8, 19)
+    assert result.symbols_total == 2
+    assert result.symbols_current == 1
+    assert result.symbols_refreshed == 1
+    assert result.symbols_failed == 0
+    assert service._read_price_cache_unchecked("MSFT")["date"].max().date() == date(
+        2026, 8, 19
+    )
+    service._download_batch_range.assert_called_once()
+
+
+def test_incremental_refresh_bootstraps_symbols_without_cache(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    pd.DataFrame(
+        {
+            "Symbol": ["MSFT"],
+            "Security": ["Microsoft"],
+            "GICS Sector": ["Technology"],
+        }
+    ).to_csv(tmp_path / "constituents.csv", index=False)
+    history = _price_frame(300)
+    history.loc[history.index[-1], "date"] = pd.Timestamp("2026-08-19")
+    service._download_batch = Mock(return_value={"MSFT": history})
+    service._download_batch_range = Mock()
+
+    result = service.refresh_price_cache_incremental()
+
+    assert result.symbols_refreshed == 1
+    assert result.symbols_failed == 0
+    assert len(service._read_price_cache_unchecked("MSFT")) == 300
+    service._download_batch.assert_called_once_with(["MSFT"], period="2y")
+    service._download_batch_range.assert_not_called()
+
+
+def test_incremental_refresh_rebuilds_cache_with_insufficient_history(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.now = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    pd.DataFrame(
+        {
+            "Symbol": ["NEW"],
+            "Security": ["New Company"],
+            "GICS Sector": ["Industrials"],
+        }
+    ).to_csv(tmp_path / "constituents.csv", index=False)
+    service._write_price_cache("NEW", _price_frame(20))
+    history = _price_frame(300)
+    service._download_batch = Mock(return_value={"NEW": history})
+    service._download_batch_range = Mock()
+
+    result = service.refresh_price_cache_incremental()
+
+    assert result.symbols_refreshed == 1
+    assert len(service._read_price_cache_unchecked("NEW")) == 300
+    service._download_batch.assert_called_once_with(["NEW"], period="2y")
+    service._download_batch_range.assert_not_called()
+
+
+def test_run_cached_scores_without_downloading(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    pd.DataFrame(
+        {
+            "Symbol": ["MSFT"],
+            "Security": ["Microsoft"],
+            "GICS Sector": ["Technology"],
+        }
+    ).to_csv(tmp_path / "constituents.csv", index=False)
+    service._write_price_cache("MSFT", _price_frame())
+    service._download_batch = Mock()
+    service._download_batch_range = Mock()
+
+    result = service.run_cached()
+
+    assert result.ranking["symbol"].tolist() == ["MSFT"]
+    assert result.metadata["price_cache_hits"] == 1
+    service._download_batch.assert_not_called()
+    service._download_batch_range.assert_not_called()
 
 
 def test_exports_ranking_errors_and_metadata(tmp_path: Path) -> None:

@@ -43,6 +43,9 @@ class PlannedEntryService:
         rearm_distance_pct: float | None = None,
         notes: str | None = None,
         expires_at: date | None = None,
+        import_source: str | None = None,
+        external_reference: str | None = None,
+        import_batch_id: str | None = None,
     ) -> PlannedEntryLevelORM:
         target_price = float(target_price)
         if target_price <= 0:
@@ -75,6 +78,9 @@ class PlannedEntryService:
             rearm_distance_pct=rearm,
             notes=(notes or "").strip() or None,
             expires_at=expires_at,
+            import_source=import_source,
+            external_reference=external_reference,
+            import_batch_id=import_batch_id,
         )
 
     def set_status(self, level_id: int, status: str) -> PlannedEntryLevelORM | None:

@@ -13,9 +13,14 @@ import streamlit as st
 from core.config import get_settings, load_yaml_config  # noqa: E402
 from data.database import init_db, session_scope  # noqa: E402
 from data.repositories.alerts_repo import AlertsRepository  # noqa: E402
+from data.repositories.assets_repo import AssetsRepository  # noqa: E402
 from data.repositories.planned_entries_repo import PlannedEntriesRepository  # noqa: E402
 from data.repositories.trade_intents_repo import TradeIntentsRepository  # noqa: E402
 from services.alert_service import AlertService  # noqa: E402
+from services.planned_entry_import_service import (  # noqa: E402
+    PlannedEntryExcelParser,
+    PlannedEntryImportService,
+)
 from services.planned_entry_service import PlannedEntryService  # noqa: E402
 
 st.title("Alerts")
@@ -119,10 +124,14 @@ with tab_active:
         default_statuses = [s for s in ["new", "sent"] if s in status_options]
 
         filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
-        severity_filter = filter_col1.multiselect("Severidad", severity_options, default=severity_options)
+        severity_filter = filter_col1.multiselect(
+            "Severidad", severity_options, default=severity_options
+        )
         group_filter = filter_col2.multiselect("Grupo", group_options, default=group_options)
         type_filter = filter_col3.multiselect("Tipo", type_options, default=type_options)
-        active_status_filter = filter_col4.multiselect("Estado", status_options, default=default_statuses)
+        active_status_filter = filter_col4.multiselect(
+            "Estado", status_options, default=default_statuses
+        )
 
         active_df = alerts_df.copy()
         if severity_filter:
@@ -141,7 +150,9 @@ with tab_active:
             selected_alert_id = st.selectbox(
                 "Seleccionar alerta para ver detalle o cambiar estado",
                 options=active_df["id"].tolist(),
-                format_func=lambda aid: f"#{aid} — {next((a.title for a in alerts if a.id == aid), '')}",
+                format_func=lambda aid: (
+                    f"#{aid} — {next((a.title for a in alerts if a.id == aid), '')}"
+                ),
             )
             selected_alert = next(alert for alert in alerts if alert.id == selected_alert_id)
 
@@ -162,7 +173,14 @@ with tab_active:
                     st.rerun()
             with detail_col:
                 payload = selected_alert.payload_json or {}
-                key_fields = ["alert_group", "symbol", "score", "rsi", "distance_to_support_pct", "recommendation"]
+                key_fields = [
+                    "alert_group",
+                    "symbol",
+                    "score",
+                    "rsi",
+                    "distance_to_support_pct",
+                    "recommendation",
+                ]
                 inline_items = {k: payload[k] for k in key_fields if k in payload}
                 if inline_items:
                     kv_pairs = " · ".join(f"**{k}**: {v}" for k, v in inline_items.items())
@@ -181,7 +199,11 @@ with tab_history:
             default=sorted(alerts_df["Estado"].unique()),
             key="hist_status_filter",
         )
-        hist_df = alerts_df[alerts_df["Estado"].isin(hist_status_filter)] if hist_status_filter else alerts_df
+        hist_df = (
+            alerts_df[alerts_df["Estado"].isin(hist_status_filter)]
+            if hist_status_filter
+            else alerts_df
+        )
         st.dataframe(hist_df.drop(columns=["id"]), use_container_width=True, hide_index=True)
 
         logs_df = pd.DataFrame(
@@ -212,14 +234,18 @@ with tab_intents:
             key="intents_status_filter",
         )
         filtered_intents = intents_df[intents_df["Estado"].isin(intent_status_filter)]
-        st.dataframe(filtered_intents.drop(columns=["id"]), use_container_width=True, hide_index=True)
+        st.dataframe(
+            filtered_intents.drop(columns=["id"]), use_container_width=True, hide_index=True
+        )
 
         if not filtered_intents.empty:
             st.divider()
             selected_intent_id = st.selectbox(
                 "Seleccionar trade intent",
                 options=filtered_intents["id"].tolist(),
-                format_func=lambda iid: f"#{iid} — {next((i.symbol for i in intents if i.id == iid), '')}",
+                format_func=lambda iid: (
+                    f"#{iid} — {next((i.symbol for i in intents if i.id == iid), '')}"
+                ),
             )
             selected_intent = next(intent for intent in intents if intent.id == selected_intent_id)
 
@@ -229,18 +255,34 @@ with tab_intents:
                     "Cambiar estado",
                     ["new", "reviewed", "approved", "rejected", "expired", "executed_manually"],
                     index=[
-                        "new", "reviewed", "approved", "rejected", "expired", "executed_manually",
+                        "new",
+                        "reviewed",
+                        "approved",
+                        "rejected",
+                        "expired",
+                        "executed_manually",
                     ].index(selected_intent.status),
                     key="intent_status_select",
                 )
-                if st.button("Actualizar estado", use_container_width=True, key="intent_status_btn"):
+                if st.button(
+                    "Actualizar estado", use_container_width=True, key="intent_status_btn"
+                ):
                     with session_scope() as session:
-                        TradeIntentsRepository(session).update_status(selected_intent_id, next_status)
+                        TradeIntentsRepository(session).update_status(
+                            selected_intent_id, next_status
+                        )
                     st.success("Estado del trade intent actualizado.")
                     st.rerun()
             with intent_detail_col:
                 rationale = selected_intent.rationale_json or {}
-                key_fields = ["final_score", "technical_score", "risk_score", "portfolio_fit_score", "recommendation", "suggested_weight_add"]
+                key_fields = [
+                    "final_score",
+                    "technical_score",
+                    "risk_score",
+                    "portfolio_fit_score",
+                    "recommendation",
+                    "suggested_weight_add",
+                ]
                 inline_items = {k: rationale[k] for k in key_fields if k in rationale}
                 if inline_items:
                     kv_pairs = " · ".join(f"**{k}**: {v}" for k, v in inline_items.items())
@@ -252,9 +294,139 @@ with tab_intents:
 with tab_plans:
     st.subheader("Puntos de compra parcial")
     st.caption(
-        "Los niveles se crean desde Asset Detail. Active y triggered se vigilan en cada "
-        "escaneo diario; triggered se rearma automáticamente al alejarse."
+        "Los niveles se crean desde Asset Detail o se importan en bloque. Active y "
+        "triggered se vigilan en cada escaneo diario; triggered se rearma "
+        "automáticamente al alejarse."
     )
+    flash_message = st.session_state.pop("planned_entry_import_message", None)
+    if flash_message:
+        st.success(flash_message)
+
+    with st.expander("Importar plan de compras desde Excel", expanded=False):
+        st.caption(
+            "Columnas obligatorias: Código activo, Precio objetivo y % de capital "
+            "sugerido. Antes de guardar se validan y previsualizan todas las filas."
+        )
+        template_col, upload_col = st.columns([1, 3], vertical_alignment="bottom")
+        template_col.download_button(
+            "Descargar plantilla",
+            data=PlannedEntryExcelParser.template(),
+            file_name="plantilla_plan_compras_parciales.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        uploaded_plan = upload_col.file_uploader(
+            "Plan de compras (.xlsx)",
+            type=["xlsx"],
+            key="planned_entry_excel",
+        )
+        if uploaded_plan is not None:
+            try:
+                workbook_content = uploaded_plan.getvalue()
+                with session_scope() as session:
+                    import_service = PlannedEntryImportService(session)
+                    import_rows = import_service.parse(workbook_content)
+                    enabled_assets = AssetsRepository(session).list_enabled()
+
+                if not import_rows:
+                    st.warning("El Excel no contiene filas de planes de compra.")
+                else:
+                    enabled_by_symbol = {asset.symbol.upper(): asset for asset in enabled_assets}
+                    asset_by_id = {asset.id: asset for asset in enabled_assets}
+                    unknown_symbols = sorted(
+                        {
+                            row.symbol
+                            for row in import_rows
+                            if row.symbol and row.symbol not in enabled_by_symbol
+                        }
+                    )
+                    manual_mappings: dict[str, int] = {}
+                    if unknown_symbols:
+                        st.markdown("**Mapeo de códigos no reconocidos**")
+                        symbol_options = [""] + sorted(enabled_by_symbol)
+                        mapping_columns = st.columns(min(3, len(unknown_symbols)))
+                        for index, source_symbol in enumerate(unknown_symbols):
+                            mapped_symbol = mapping_columns[index % len(mapping_columns)].selectbox(
+                                source_symbol,
+                                symbol_options,
+                                format_func=lambda value: value or "Sin mapear (omitir)",
+                                key=f"planned_entry_mapping_{source_symbol}",
+                            )
+                            if mapped_symbol:
+                                manual_mappings[source_symbol] = enabled_by_symbol[mapped_symbol].id
+
+                    with session_scope() as session:
+                        previews = PlannedEntryImportService(session).preview(
+                            import_rows,
+                            manual_mappings=manual_mappings,
+                        )
+                    preview_frame = pd.DataFrame(
+                        [
+                            {
+                                "Fila": item.row.row_number,
+                                "Código Excel": item.row.symbol,
+                                "Activo": (
+                                    item.asset.symbol
+                                    if item.asset is not None
+                                    else asset_by_id.get(
+                                        manual_mappings.get(item.row.symbol, -1)
+                                    ).symbol
+                                    if manual_mappings.get(item.row.symbol) in asset_by_id
+                                    else "N/A"
+                                ),
+                                "Precio objetivo": item.row.target_price,
+                                "% capital": item.row.suggested_weight_pct,
+                                "Tolerancia %": item.row.tolerance_pct,
+                                "Rearme %": item.row.rearm_distance_pct,
+                                "Expira": item.row.expires_at,
+                                "Estado": item.status,
+                                "Detalle": "; ".join(item.messages),
+                            }
+                            for item in previews
+                        ]
+                    )
+                    st.dataframe(
+                        preview_frame,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "Precio objetivo": st.column_config.NumberColumn(format="%.6f"),
+                            "% capital": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Tolerancia %": st.column_config.NumberColumn(format="%.2f%%"),
+                            "Rearme %": st.column_config.NumberColumn(format="%.2f%%"),
+                        },
+                    )
+                    ready_count = sum(item.status == "Lista para importar" for item in previews)
+                    duplicate_count = sum(item.status == "Duplicada" for item in previews)
+                    preview_cols = st.columns(4)
+                    preview_cols[0].metric("Filas", len(previews))
+                    preview_cols[1].metric("Listas", ready_count)
+                    preview_cols[2].metric("Duplicadas", duplicate_count)
+                    preview_cols[3].metric(
+                        "Con incidencias", len(previews) - ready_count - duplicate_count
+                    )
+                    if st.button(
+                        "Confirmar importación",
+                        type="primary",
+                        disabled=ready_count == 0,
+                        use_container_width=True,
+                        key="confirm_planned_entry_import",
+                    ):
+                        with session_scope() as session:
+                            summary = PlannedEntryImportService(session).import_rows(
+                                import_rows,
+                                manual_mappings=manual_mappings,
+                            )
+                        st.session_state["planned_entry_import_message"] = (
+                            f"Importadas: {summary.imported} · Duplicadas: "
+                            f"{summary.duplicates} · Sin mapear: {summary.unmapped} · "
+                            f"Inválidas: {summary.invalid}"
+                        )
+                        st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+    st.divider()
     if not planned_levels:
         st.info("Todavía no hay niveles de compra planificados.")
     else:

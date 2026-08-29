@@ -2,7 +2,7 @@ reference_universes:
   etfs_equity_broad:
     symbols:
       - SPY
-      - QQQ
+      - CNDX.L
       - SXR8.DE
       - VWCE.DE
       - EXSA.DE
@@ -20,7 +20,6 @@ reference_universes:
       - IB28
       - IS04.DE
       - SHY
-      - BIL
       - FLOT
       - JPST
       - 10AM.DE

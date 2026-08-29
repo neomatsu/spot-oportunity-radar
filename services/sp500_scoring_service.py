@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -33,11 +33,27 @@ class SP500ScoringResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class SP500IncrementalRefreshResult:
+    target_session: date
+    symbols_total: int
+    symbols_current: int
+    symbols_refreshed: int
+    symbols_failed: int
+    errors: list[dict[str, str]] = field(default_factory=list)
+
+
 class SP500ScoringService:
     """Scores an external S&P 500 snapshot without mutating the tracked universe."""
 
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        *,
+        now: datetime | None = None,
+    ) -> None:
         self.config = config or load_yaml_config("sp500_scoring.yaml")
+        self.now = now or datetime.now(UTC)
         self.root_dir = get_settings().root_dir
         self.technical = TechnicalService()
         self.support = SupportDetectionService()
@@ -46,6 +62,105 @@ class SP500ScoringService:
         self.rebalance = RebalanceService()
         self.recommendation = RecommendationService()
         self.regime = MarketRegimeService()
+
+    def refresh_price_cache_incremental(self) -> SP500IncrementalRefreshResult:
+        """Append recent bars only for constituents whose cache is behind."""
+        constituents = self.load_constituents(force=False)
+        symbols = constituents["yahoo_symbol"].dropna().astype(str).tolist()
+        target_session = self._expected_market_session()
+        current = 0
+        pending: list[str] = []
+        bootstrap: list[str] = []
+        existing_frames: dict[str, pd.DataFrame] = {}
+        minimum_rows = int(
+            self.config.get("market_data", {}).get("min_history_rows", 220)
+        )
+        for symbol in symbols:
+            latest, cached_rows = self._cached_price_status(symbol)
+            if latest is None:
+                bootstrap.append(symbol)
+                continue
+            if latest >= target_session:
+                current += 1
+                continue
+            if cached_rows < minimum_rows:
+                bootstrap.append(symbol)
+                continue
+            cached = self._read_price_cache_unchecked(symbol)
+            if cached is None:
+                bootstrap.append(symbol)
+                continue
+            existing_frames[symbol] = cached
+            pending.append(symbol)
+
+        market_cfg = self.config.get("market_data", {})
+        batch_size = int(market_cfg.get("batch_size", 50))
+        overlap_days = int(market_cfg.get("incremental_overlap_days", 7))
+        start_date = target_session - timedelta(days=max(2, overlap_days))
+        end_date = self.now.date() + timedelta(days=1)
+        refreshed = 0
+        errors: list[dict[str, str]] = []
+
+        for offset in range(0, len(pending), batch_size):
+            batch = pending[offset : offset + batch_size]
+            try:
+                downloaded = self._download_batch_range(
+                    batch,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception as exc:
+                errors.extend(
+                    {"yahoo_symbol": symbol, "error": str(exc)} for symbol in batch
+                )
+                continue
+            for symbol in batch:
+                recent = downloaded.get(symbol)
+                if recent is None or recent.empty:
+                    errors.append(
+                        {
+                            "yahoo_symbol": symbol,
+                            "error": "yfinance returned no recent daily prices",
+                        }
+                    )
+                    continue
+                existing = existing_frames.get(symbol)
+                combined = recent if existing is None else pd.concat([existing, recent])
+                combined = self._normalize_price_frame(combined)
+                self._write_price_cache(symbol, combined)
+                refreshed += 1
+
+        bootstrap_period = str(market_cfg.get("incremental_bootstrap_period", "2y"))
+        for offset in range(0, len(bootstrap), batch_size):
+            batch = bootstrap[offset : offset + batch_size]
+            try:
+                downloaded = self._download_batch(batch, period=bootstrap_period)
+            except Exception as exc:
+                errors.extend(
+                    {"yahoo_symbol": symbol, "error": str(exc)} for symbol in batch
+                )
+                continue
+            for symbol in batch:
+                frame = downloaded.get(symbol)
+                if frame is None or frame.empty:
+                    errors.append(
+                        {
+                            "yahoo_symbol": symbol,
+                            "error": "yfinance returned no bootstrap price history",
+                        }
+                    )
+                    continue
+                self._write_price_cache(symbol, frame)
+                refreshed += 1
+
+        return SP500IncrementalRefreshResult(
+            target_session=target_session,
+            symbols_total=len(symbols),
+            symbols_current=current,
+            symbols_refreshed=refreshed,
+            symbols_failed=len(errors),
+            errors=errors,
+        )
 
     def run(
         self,
@@ -71,14 +186,83 @@ class SP500ScoringService:
             batch_size=selected_batch_size,
         )
 
+        return self._build_scoring_result(
+            constituents,
+            frames,
+            download_errors,
+            started_at=started_at,
+            metadata={
+                "price_cache_hits": cache_hits,
+                "history_period": selected_period,
+            },
+        )
+
+    def run_cached(
+        self,
+        *,
+        refresh_constituents: bool = False,
+        limit: int | None = None,
+    ) -> SP500ScoringResult:
+        """Score the universe from local price caches without network downloads."""
+        started_at = datetime.now(UTC)
+        constituents = self.load_constituents(force=refresh_constituents)
+        if limit is not None:
+            constituents = constituents.head(limit).copy()
+        frames: dict[str, pd.DataFrame] = {}
+        errors: list[dict[str, Any]] = []
+        for _, constituent in constituents.iterrows():
+            yahoo_symbol = str(constituent["yahoo_symbol"])
+            frame = self._read_price_cache_unchecked(yahoo_symbol)
+            if frame is None or frame.empty:
+                errors.append(self._error_row(constituent, "No cached price history available"))
+                continue
+            frames[yahoo_symbol] = frame
+
+        return self._build_scoring_result(
+            constituents,
+            frames,
+            errors,
+            started_at=started_at,
+            metadata={
+                "price_cache_hits": len(frames),
+                "history_period": "cached",
+            },
+        )
+
+    def cached_price_history(self, yahoo_symbol: str) -> pd.DataFrame:
+        """Return an isolated copy of a constituent's cached daily history."""
+        frame = self._read_price_cache_unchecked(yahoo_symbol)
+        return pd.DataFrame() if frame is None else frame.copy()
+
+    def _build_scoring_result(
+        self,
+        constituents: pd.DataFrame,
+        frames: dict[str, pd.DataFrame],
+        initial_errors: list[dict[str, Any]],
+        *,
+        started_at: datetime,
+        metadata: dict[str, Any],
+    ) -> SP500ScoringResult:
+
         rows: list[dict[str, Any]] = []
-        errors = list(download_errors)
+        errors = list(initial_errors)
+        minimum_rows = int(
+            self.config.get("market_data", {}).get("min_history_rows", 220)
+        )
         for index, constituent in constituents.reset_index(drop=True).iterrows():
             yahoo_symbol = str(constituent["yahoo_symbol"])
             frame = frames.get(yahoo_symbol)
             if frame is None or frame.empty:
                 if not any(error["yahoo_symbol"] == yahoo_symbol for error in errors):
                     errors.append(self._error_row(constituent, "No price history available"))
+                continue
+            if len(frame) < minimum_rows:
+                errors.append(
+                    self._error_row(
+                        constituent,
+                        f"Insufficient history: {len(frame)} rows; minimum is {minimum_rows}",
+                    )
+                )
                 continue
             try:
                 rows.append(self.score_asset(constituent, frame, synthetic_id=-(index + 1)))
@@ -95,15 +279,14 @@ class SP500ScoringService:
 
         finished_at = datetime.now(UTC)
         metadata = {
+            **metadata,
             "started_at_utc": started_at.isoformat(),
             "finished_at_utc": finished_at.isoformat(),
             "duration_seconds": round((finished_at - started_at).total_seconds(), 2),
             "constituents_requested": len(constituents),
             "assets_scored": len(ranking),
             "assets_failed": len(errors),
-            "price_cache_hits": cache_hits,
             "price_provider": "yfinance",
-            "history_period": selected_period,
             "portfolio_context": "neutral",
             "database_assets_modified": False,
         }
@@ -211,6 +394,46 @@ class SP500ScoringService:
                 if attempt + 1 < attempts:
                     time.sleep(float(cfg.get("retry_backoff_seconds", 3)) * (attempt + 1))
         raise RuntimeError(f"yfinance batch failed after {attempts} attempts: {last_error}")
+
+    def _download_batch_range(
+        self,
+        symbols: list[str],
+        *,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, pd.DataFrame]:
+        import yfinance as yf
+
+        cfg = self.config.get("market_data", {})
+        attempts = max(1, int(cfg.get("retries", 2)))
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                raw = yf.download(
+                    tickers=symbols,
+                    start=start_date.isoformat(),
+                    end=end_date.isoformat(),
+                    interval=str(cfg.get("interval", "1d")),
+                    group_by="ticker",
+                    auto_adjust=False,
+                    threads=True,
+                    progress=False,
+                    timeout=30,
+                )
+                return {
+                    symbol: frame
+                    for symbol in symbols
+                    if not (
+                        frame := self._extract_symbol_frame(raw, symbol, len(symbols))
+                    ).empty
+                }
+            except Exception as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    time.sleep(float(cfg.get("retry_backoff_seconds", 3)) * (attempt + 1))
+        raise RuntimeError(
+            f"yfinance incremental batch failed after {attempts} attempts: {last_error}"
+        )
 
     def score_asset(
         self,
@@ -356,11 +579,41 @@ class SP500ScoringService:
         age_hours = (time.time() - path.stat().st_mtime) / 3600
         if age_hours > max_age:
             return None
+        return self._read_price_cache_unchecked(symbol)
+
+    def _read_price_cache_unchecked(self, symbol: str) -> pd.DataFrame | None:
+        path = self._price_cache_path(symbol)
+        if not path.exists():
+            return None
         try:
             return self._normalize_price_frame(pd.read_csv(path))
         except Exception:
             logger.warning("Ignoring invalid price cache for %s", symbol, exc_info=True)
             return None
+
+    def _cached_price_status(self, symbol: str) -> tuple[date | None, int]:
+        path = self._price_cache_path(symbol)
+        if not path.exists():
+            return None, 0
+        try:
+            values = pd.to_datetime(
+                pd.read_csv(path, usecols=["date"])["date"], errors="coerce"
+            ).dropna()
+            if values.empty:
+                return None, 0
+            return values.max().date(), len(values)
+        except Exception:
+            logger.warning("Cannot inspect price cache for %s", symbol, exc_info=True)
+            return None, 0
+
+    def _expected_market_session(self) -> date:
+        today = self.now.date()
+        cutoff_hour = int(
+            self.config.get("market_data", {}).get("market_close_cutoff_utc_hour", 21)
+        )
+        if self.now.hour >= cutoff_hour and pd.Timestamp(today).dayofweek < 5:
+            return today
+        return (pd.Timestamp(today) - pd.offsets.BDay(1)).date()
 
     def _write_price_cache(self, symbol: str, frame: pd.DataFrame) -> None:
         path = self._price_cache_path(symbol)

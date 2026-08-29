@@ -24,7 +24,7 @@ visualization:
     - {score: 80, label: "Excepcional"}
 
 history:
-  default_start_date: "1990-01-02"
+  default_start_date: "2020-01-01"
   maximum_start_date: "1980-01-01"
   warmup_years: 20
   source_version: "sp500_opportunity_v5_rolling_calibration"

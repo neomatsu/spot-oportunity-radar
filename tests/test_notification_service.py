@@ -120,17 +120,19 @@ def test_telegram_can_filter_exact_alert_types() -> None:
     assert telegram_result.status == "skipped"
 
 
-def test_portfolio_asset_bypasses_exact_alert_type_filter() -> None:
+def test_portfolio_asset_respects_exact_alert_type_filter() -> None:
     service = NotificationService()
+    service.config["channels"]["telegram"] = True
+    service.config["telegram"]["enabled_for"] = ["high"]
     service.config["telegram"]["enabled_alert_types"] = ["entry_signal"]
-    service.config["telegram"]["portfolio_assets_allow_all_alert_types"] = True
+    alert = _build_alert()
+    alert.alert_type = "risk_deterioration"
+    alert.payload_json = {"is_portfolio_asset": True}
 
-    assert service._telegram_allows_alert_type(
-        "risk_deterioration", is_portfolio_asset=True
-    )
-    assert not service._telegram_allows_alert_type(
-        "risk_deterioration", is_portfolio_asset=False
-    )
+    results = service.send_alert(alert)
+    telegram_result = next(result for result in results if result.channel == "telegram")
+
+    assert telegram_result.status == "skipped"
 
 
 def test_planned_entry_alert_is_allowed_and_message_lists_level() -> None:

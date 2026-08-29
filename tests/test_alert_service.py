@@ -409,6 +409,16 @@ def test_sell_alerts_are_deduplicated(db_session) -> None:
     assert second.alerts_deduplicated >= 1
     assert len([alert for alert in alerts if alert.alert_type == "take_profit"]) == 1
 
+    for alert in alerts:
+        alert.last_triggered_at = datetime.now(UTC) - timedelta(days=1)
+    db_session.flush()
+
+    next_day = service.scan_market_events()
+    alerts = AlertsRepository(db_session).list_recent()
+
+    assert next_day.alerts_deduplicated >= 1
+    assert len([alert for alert in alerts if alert.alert_type == "take_profit"]) == 1
+
 
 def test_rsi_cycle_alert_is_generated_for_latest_signal(db_session, monkeypatch) -> None:
     _seed_actionable_asset(

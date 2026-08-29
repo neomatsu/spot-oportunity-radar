@@ -37,12 +37,7 @@ class NotificationService:
         severity_enabled = set(self.config.get("telegram", {}).get("enabled_for", []))
         if alert.severity not in severity_enabled:
             return NotificationResult(channel="telegram", status="skipped")
-        if not self._telegram_allows_alert_type(
-            alert.alert_type,
-            is_portfolio_asset=bool(
-                (alert.payload_json or {}).get("is_portfolio_asset", False)
-            ),
-        ):
+        if not self._telegram_allows_alert_type(alert.alert_type):
             return NotificationResult(channel="telegram", status="skipped")
 
         if (
@@ -72,14 +67,8 @@ class NotificationService:
     def _telegram_allows_alert_type(
         self,
         alert_type: str,
-        *,
-        is_portfolio_asset: bool = False,
     ) -> bool:
         telegram_cfg = self.config.get("telegram", {})
-        if is_portfolio_asset and telegram_cfg.get(
-            "portfolio_assets_allow_all_alert_types", False
-        ):
-            return True
         enabled_alert_types = telegram_cfg.get("enabled_alert_types")
         if enabled_alert_types is not None:
             return alert_type in set(enabled_alert_types)

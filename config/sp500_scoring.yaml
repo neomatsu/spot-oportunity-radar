@@ -9,6 +9,9 @@ market_data:
   batch_size: 50
   retries: 2
   retry_backoff_seconds: 3
+  incremental_overlap_days: 7
+  incremental_bootstrap_period: "2y"
+  market_close_cutoff_utc_hour: 21
   cache_dir: "cache/sp500_scoring/prices"
   cache_max_age_hours: 18
   min_history_rows: 220
@@ -20,3 +23,8 @@ scoring:
 output:
   directory: "outputs/screeners"
   filename_prefix: "sp500_scoring"
+
+snapshot:
+  ranking_file: "cache/sp500_scoring/ranking_latest.csv"
+  errors_file: "cache/sp500_scoring/ranking_errors_latest.csv"
+  metadata_file: "cache/sp500_scoring/ranking_metadata_latest.json"

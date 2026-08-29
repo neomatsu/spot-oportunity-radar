@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from unittest.mock import Mock
 
 import httpx
 import numpy as np
@@ -155,6 +156,26 @@ def test_external_failures_do_not_break_local_components(db_session) -> None:
     assert report.actionable is False
     assert report.classification == "DATOS_INSUFICIENTES"
     assert sum(component.error is not None for component in report.components) == 3
+
+
+def test_manual_refresh_forces_market_data_before_updating_history(db_session) -> None:
+    _seed_prices(db_session)
+    refresh_result = Mock(status="refreshed")
+    market_data_service = Mock()
+    market_data_service.refresh_daily_prices.return_value = refresh_result
+    service = BitcoinOpportunityService(
+        db_session,
+        config=_config(),
+        market_data_service=market_data_service,
+    )
+    service.update_latest_history = Mock(return_value=pd.DataFrame())
+
+    result = service.refresh_market_data()
+
+    asset = AssetsRepository(db_session).get_by_symbol("BTCUSDT")
+    assert result is refresh_result
+    market_data_service.refresh_daily_prices.assert_called_once_with(asset, force=True)
+    service.update_latest_history.assert_called_once_with()
 
 
 def test_contrarian_components_reward_fear_and_falling_dollar(db_session) -> None:

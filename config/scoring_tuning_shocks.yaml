@@ -7,9 +7,9 @@ reference_universes:
     candidate_config_id: cfg_02
     weight: 0.25
     min_test_trades: 2
-  qqq_shock_reference:
+  cndx_shock_reference:
     symbols:
-      - QQQ
+      - CNDX.L
     start_date: 2025-01-15
     end_date: 2025-07-31
     candidate_config_id: cfg_02

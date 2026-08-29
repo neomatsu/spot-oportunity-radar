@@ -22,6 +22,7 @@ recent_provider_mix_window_days: 90
 provider_symbol_aliases:
   yfinance:
     SPY4.DE: SPY4.F
+    WSML.LON: WSML.L
 providers_priority:
   stock:
     - fmp

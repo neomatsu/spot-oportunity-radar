@@ -66,6 +66,7 @@ http:
 
 history:
   default_years: 2
+  default_period: "since_2018"
   max_years: 9
   enable_price_backfill: true
   indicator_start_date: "2018-01-01"

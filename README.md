@@ -1,5 +1,8 @@
 # Spot Opportunity Radar
 
+La descripcion funcional completa para usuarios y nuevos colaboradores esta en
+[`docs/application_functional_guide.md`](docs/application_functional_guide.md).
+
 Spot Opportunity Radar es una herramienta personal de decision support para detectar oportunidades de compra en spot sobre una watchlist cerrada de acciones, ETFs y crypto. Combina estructura tecnica, modelado de riesgo, ajuste a cartera y trazabilidad de decisiones en una app Streamlit local.
 
 ## Stack
@@ -438,6 +441,18 @@ Cada movimiento conserva `external_source`, `external_transaction_id`, impuestos
 payload original. La restriccion unica `external_source + external_transaction_id`
 impide importar dos veces la misma operacion y permite reutilizar el modelo para
 otros brokers mediante parsers adicionales.
+
+El mismo bloque de Portfolio permite importar el historial CSV de operaciones spot
+de Kraken. Se procesan ejecuciones `BUY` y `SELL`, se usa `txid` como identificador
+idempotente y el activo base del par se mapea contra las criptomonedas configuradas
+(por ejemplo, `BTC/USDC` a `BTCUSDT`) o mediante selector manual. Las operaciones
+con margen no se importan.
+
+Kraken expresa precio, coste y comision en la divisa cotizada del par. Para mantener
+la contabilidad del portfolio en EUR, el importador convierte esos valores con el
+cambio historico de la fecha. `USDC` y `USDT` se tratan como USD bajo una hipotesis
+explicita de paridad 1:1; el payload conserva importes originales, cambio, fecha y
+provider para auditoria. Si no existe cambio EUR, la fila se omite como invalida.
 
 ### Divisas y valoracion de cartera
 
@@ -1200,6 +1215,30 @@ periodo, lotes, antiguedad del cache y salida se configuran en
 `config/sp500_scoring.yaml`. Yahoo puede devolver simbolos ausentes o errores
 parciales; estos quedan registrados en `Errors` y el resto del estudio continua.
 
+### S&P 500 Opportunities
+
+La pagina `S&P 500 Opportunities` presenta este universo externo como un ranking
+consultivo. Permite buscar por ticker o empresa, filtrar por sector,
+recommendation, regimen, score minimo y riesgo maximo, descargar el resultado
+filtrado y abrir una ficha rapida con precio, SMA50 y SMA200.
+
+El ranking se persiste en `cache/sp500_scoring/ranking_latest.csv`, junto con sus
+errores y metadatos. Abrir o filtrar la pagina no recalcula indicadores. El boton
+`Actualizar ranking` primero incorpora solo las barras de precio que falten y luego
+puntua las empresas desde la cache local. Este modulo no inserta componentes en la
+watchlist, no modifica la cartera y no genera alertas.
+
+## Volume Profile Lab
+
+La pagina experimental `Volume Profile Lab` calcula un perfil de volumen estimado a partir de
+las barras OHLCV diarias ya presentes en SQLite. Reparte uniformemente el volumen de cada vela
+entre los bins atravesados desde Low hasta High, muestra candles y perfil horizontal, e
+identifica POC y High Volume Nodes relevantes.
+
+El resultado es un proxy visual, no volumen intradia real negociado por precio. El laboratorio
+no consulta providers, no guarda resultados y no modifica scoring, soportes, recomendaciones,
+alertas ni backtesting.
+
 ## Bitcoin Opportunity Detector
 
 La pagina `Bitcoin Opportunity Detector` ofrece un score contrarian independiente
@@ -1313,6 +1352,16 @@ sin asociarlos artificialmente a un ETF. Los tipos habilitados para Telegram sig
 controlados por `config/notifications.yaml`; el perfil inicial alerta compras en
 `60 / 62.5 / 77.5` y una reduccion defensiva solo al cruzar `25` hacia abajo.
 
+Antes de recalcular el bloque `Market breadth`, tanto el boton `Actualizar indicador`
+como el job diario comprueban la ultima sesion de cada componente del S&P 500. Solo
+descargan las barras recientes de las series atrasadas; un componente sin cache
+recibe un bootstrap de dos anos para poder calcular SMA200. El mismo refresco puede
+ejecutarse de forma aislada para diagnostico:
+
+```bash
+python -m jobs.refresh_sp500_breadth
+```
+
 El estudio amplio y reanudable se configura en
 `config/sp500_opportunity_study.yaml` y se ejecuta con:
 
@@ -1370,3 +1419,30 @@ nivel queda `triggered` y no vuelve a alertar hasta que el precio se aleja por e
 distancia de rearme. Ambos tipos usan la persistencia, UI, deduplicación y Telegram existentes;
 sus defaults están en `config/planned_entries.yaml`, `config/alerts.yaml` y
 `config/notifications.yaml`.
+
+### Importacion Excel de planes
+
+`Alerts > Planes de compra > Importar plan de compras desde Excel` permite descargar una
+plantilla e importar varios activos y niveles a la vez. Son obligatorios `Codigo activo`,
+`Precio objetivo` y `% de capital sugerido`; tolerancia, rearme, capital nominal, expiracion,
+notas, divisa e ID externo son opcionales. Los codigos no reconocidos pueden mapearse a un
+activo habilitado antes de confirmar.
+
+La UI muestra una previsualizacion fila a fila y omite errores, activos sin mapear y
+duplicados sin bloquear las filas validas. Cada lote queda identificado y el ID externo o una
+huella determinista impiden cargar dos veces el mismo nivel. Todos los registros importados
+usan `PlannedEntryService`, por lo que mantienen las mismas validaciones y el mismo flujo de
+alertas del job diario.
+
+### Reserva de liquidez en Portfolio
+
+El resumen de Portfolio conserva `Cash estimado` como capital total menos el coste pendiente
+de las posiciones, y añade una capa separada de planificación para los niveles de compra. Los
+niveles `active` y `triggered` reservan su capital nominal cuando está informado; en caso
+contrario reservan el porcentaje sugerido sobre el capital total. Los niveles pausados,
+expirados o ejecutados no consumen reserva.
+
+La pantalla distingue compromiso solicitado, reserva efectiva limitada por el cash estimado,
+cash completamente libre y déficit no cubierto. Esta reserva es informativa y no bloquea
+fondos reales en el broker. El desglose por nivel permite auditar el activo, precio objetivo,
+distancia, criterio de cálculo e importe comprometido.

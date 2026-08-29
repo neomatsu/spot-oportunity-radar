@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -9,9 +10,36 @@ from sqlalchemy.orm import Session
 
 from core.models import PortfolioExposureModel
 from data.database import AssetORM
+from data.repositories.planned_entries_repo import PlannedEntriesRepository
 from data.repositories.portfolio_repo import PortfolioRepository
 from data.repositories.prices_repo import PricesRepository
 from services.currency_service import CurrencyConversion, CurrencyService
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedCashReservation:
+    level_id: int
+    asset_id: int
+    symbol: str
+    target_price: float
+    price_currency: str | None
+    status: str
+    suggested_weight_pct: float | None
+    suggested_capital: float | None
+    requested_capital: float
+    calculation_basis: str
+    current_price: float | None
+    distance_pct: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioLiquidityPlan:
+    estimated_cash: float
+    requested_commitment: float
+    effective_reserved: float
+    free_cash: float
+    reserve_deficit: float
+    reservations: tuple[PlannedCashReservation, ...]
 
 
 class PortfolioService:
@@ -248,6 +276,88 @@ class PortfolioService:
                 }
             )
         return rows
+
+    def planned_cash_reserve(
+        self,
+        *,
+        total_capital: float,
+        estimated_cash: float,
+        as_of: date | None = None,
+    ) -> PortfolioLiquidityPlan:
+        """Calculate the planning overlay created by active partial-buy levels."""
+        as_of = as_of or date.today()
+        reservations: list[PlannedCashReservation] = []
+
+        for level in PlannedEntriesRepository(self.session).list_all():
+            if level.status not in PlannedEntriesRepository.MONITORABLE_STATUSES:
+                continue
+            if level.expires_at is not None and level.expires_at < as_of:
+                continue
+
+            explicit_capital = float(level.suggested_capital or 0.0)
+            suggested_weight_pct = (
+                float(level.suggested_weight_pct)
+                if level.suggested_weight_pct is not None
+                else None
+            )
+            if explicit_capital > 0:
+                requested_capital = explicit_capital
+                calculation_basis = "capital_nominal"
+            elif suggested_weight_pct is not None and suggested_weight_pct > 0:
+                requested_capital = max(0.0, total_capital) * suggested_weight_pct / 100.0
+                calculation_basis = "porcentaje_capital"
+            else:
+                requested_capital = 0.0
+                calculation_basis = "sin_asignacion"
+
+            native_price = self._latest_valuation(level.asset_id)[0]
+            if native_price is None and level.last_observed_price is not None:
+                native_price = float(level.last_observed_price)
+            target_price = float(level.target_price)
+            distance_pct = (
+                ((native_price / target_price) - 1.0) * 100.0
+                if native_price is not None and target_price > 0
+                else None
+            )
+            reservations.append(
+                PlannedCashReservation(
+                    level_id=level.id,
+                    asset_id=level.asset_id,
+                    symbol=level.asset.symbol,
+                    target_price=target_price,
+                    price_currency=level.price_currency,
+                    status=level.status,
+                    suggested_weight_pct=suggested_weight_pct,
+                    suggested_capital=(
+                        float(level.suggested_capital)
+                        if level.suggested_capital is not None
+                        else None
+                    ),
+                    requested_capital=requested_capital,
+                    calculation_basis=calculation_basis,
+                    current_price=native_price,
+                    distance_pct=distance_pct,
+                )
+            )
+
+        reservations.sort(
+            key=lambda item: (
+                item.distance_pct is None,
+                item.distance_pct if item.distance_pct is not None else float("inf"),
+                item.symbol,
+            )
+        )
+        safe_cash = max(0.0, float(estimated_cash))
+        requested_commitment = sum(item.requested_capital for item in reservations)
+        effective_reserved = min(safe_cash, requested_commitment)
+        return PortfolioLiquidityPlan(
+            estimated_cash=safe_cash,
+            requested_commitment=requested_commitment,
+            effective_reserved=effective_reserved,
+            free_cash=max(0.0, safe_cash - requested_commitment),
+            reserve_deficit=max(0.0, requested_commitment - safe_cash),
+            reservations=tuple(reservations),
+        )
 
     def transaction_rows(self) -> list[dict[str, Any]]:
         assets = {asset.id: asset for asset in self.session.scalars(select(AssetORM)).all()}

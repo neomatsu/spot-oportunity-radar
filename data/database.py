@@ -543,6 +543,13 @@ class MarketEventORM(Base):
 
 class PlannedEntryLevelORM(Base):
     __tablename__ = "planned_entry_levels"
+    __table_args__ = (
+        UniqueConstraint(
+            "import_source",
+            "external_reference",
+            name="uq_planned_entry_import_reference",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
@@ -555,6 +562,9 @@ class PlannedEntryLevelORM(Base):
     status: Mapped[str] = mapped_column(String(30), default="active", index=True)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
     expires_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    import_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    external_reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    import_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     last_observed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_alerted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -853,6 +863,39 @@ def ensure_schema_migrations() -> None:
                     "CREATE UNIQUE INDEX IF NOT EXISTS "
                     "uq_portfolio_transaction_external_id "
                     "ON portfolio_transactions(external_source, external_transaction_id)"
+                )
+            )
+
+        if "planned_entry_levels" in table_names:
+            planned_entry_columns = {
+                column["name"] for column in inspector.get_columns("planned_entry_levels")
+            }
+            if "import_source" not in planned_entry_columns:
+                connection.execute(
+                    text("ALTER TABLE planned_entry_levels ADD COLUMN import_source VARCHAR(40)")
+                )
+            if "external_reference" not in planned_entry_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE planned_entry_levels "
+                        "ADD COLUMN external_reference VARCHAR(200)"
+                    )
+                )
+            if "import_batch_id" not in planned_entry_columns:
+                connection.execute(
+                    text("ALTER TABLE planned_entry_levels ADD COLUMN import_batch_id VARCHAR(64)")
+                )
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_planned_entry_import_reference "
+                    "ON planned_entry_levels(import_source, external_reference)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_planned_entry_import_batch "
+                    "ON planned_entry_levels(import_batch_id)"
                 )
             )
 

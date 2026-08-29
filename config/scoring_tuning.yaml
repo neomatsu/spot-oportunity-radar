@@ -8,7 +8,7 @@ reference_universes:
       - NVDA
       - TSM
       - IB28
-      - QQQ
+      - CNDX.L
       - SPY
       - BTCUSDT
       - ETHUSDT
@@ -34,7 +34,7 @@ reference_universes:
   etfs_reference:
     symbols:
       - IB28
-      - QQQ
+      - CNDX.L
       - SPY
     start_date: 2024-08-19
     end_date: 2026-03-27

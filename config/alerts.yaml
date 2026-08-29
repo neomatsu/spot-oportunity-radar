@@ -25,24 +25,24 @@ rules:
   min_minutes_between_duplicate_alerts: 180
   cooldown_by_asset_minutes: 180
   cooldown_by_alert_type_minutes:
-    entry_signal: 180
-    watch_signal: 360
+    entry_signal: 10080
+    watch_signal: 10080
     risk_deterioration: 60
     data_quality: 720
     portfolio_constraint: 360
-    overbought_warning: 720
-    take_profit: 720
-    trim_position: 720
-    reduce_risk: 240
-    exit_candidate: 180
-    stop_loss_warning: 120
-    rebalance_sell: 1440
-    buy_rsi_25: 720
-    buy_rsi_20: 720
-    buy_bullish_divergence: 720
-    sell_rsi_75: 720
-    sell_rsi_80: 720
-    sell_bearish_divergence: 720
+    overbought_warning: 10080
+    take_profit: 10080
+    trim_position: 10080
+    reduce_risk: 10080
+    exit_candidate: 10080
+    stop_loss_warning: 10080
+    rebalance_sell: 10080
+    buy_rsi_25: 10080
+    buy_rsi_20: 10080
+    buy_bullish_divergence: 10080
+    sell_rsi_75: 10080
+    sell_rsi_80: 10080
+    sell_bearish_divergence: 10080
     bitcoin_opportunity_buy: 10080
     bitcoin_opportunity_sell: 10080
     sp500_opportunity_buy: 10080

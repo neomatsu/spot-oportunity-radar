@@ -67,6 +67,15 @@ def _update_history(start_date: date, end_date: date) -> pd.DataFrame:
     return frame
 
 
+def _refresh_market_data():
+    init_db()
+    with session_scope() as session:
+        result = BitcoinOpportunityService(session).refresh_market_data()
+    _load_report.clear()
+    _load_history.clear()
+    return result
+
+
 def _score_color(score: float | None) -> str:
     if score is None:
         return "#64748b"
@@ -406,8 +415,26 @@ st.caption(
     "No modifica el scoring general, recomendaciones ni alertas."
 )
 
+refresh_result = None
 if st.button("Actualizar indicadores", type="primary"):
-    _load_report.clear()
+    with st.spinner("Actualizando Bitcoin y recalculando indicadores..."):
+        try:
+            refresh_result = _refresh_market_data()
+        except Exception as exc:
+            st.error(f"No se pudo actualizar Bitcoin: {exc}")
+
+if refresh_result is not None:
+    if refresh_result.status == "refreshed":
+        st.success(
+            "Bitcoin actualizado desde "
+            f"{refresh_result.provider_name or 'el proveedor configurado'}: "
+            f"última barra {refresh_result.last_available_bar_date}."
+        )
+    else:
+        st.warning(
+            refresh_result.message
+            or f"La actualización terminó con estado {refresh_result.status}."
+        )
 
 with st.spinner("Calculando oportunidad Bitcoin..."):
     report = _load_report()
@@ -446,11 +473,17 @@ st.caption(
 )
 history_controls = st.columns([1, 1, 3])
 history_config = load_yaml_config("bitcoin_opportunity.yaml").get("history", {})
+history_options = [1, 2, 3, 5, "since_2018"]
+default_history_period = history_config.get(
+    "default_period", history_config.get("default_years", 2)
+)
+if default_history_period not in history_options:
+    default_history_period = 2
 with history_controls[0]:
     history_period = st.selectbox(
         "Periodo",
-        [1, 2, 3, 5, "since_2018"],
-        index=1,
+        history_options,
+        index=history_options.index(default_history_period),
         format_func=lambda value: (
             "Desde 2018" if value == "since_2018" else f"{value} años"
         ),

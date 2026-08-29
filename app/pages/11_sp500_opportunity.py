@@ -76,6 +76,17 @@ def _update_history(start_date: date, end_date: date, *, force: bool) -> pd.Data
     return result
 
 
+def _refresh_current(*, force_sources: bool) -> pd.DataFrame:
+    init_db()
+    with session_scope() as session:
+        result = SP500OpportunityService(session).refresh_current(
+            force_sources=force_sources
+        )
+    _load_history.clear()
+    _load_report.clear()
+    return result
+
+
 def _component_cards(report: SP500OpportunityReport) -> str:
     cards = []
     for component in report.components:
@@ -255,12 +266,21 @@ refresh_col, force_col = st.columns([1.4, 4])
 refresh_current = refresh_col.button("Actualizar indicador", type="primary")
 force_refresh = force_col.checkbox("Forzar descarga de fuentes", value=False)
 if refresh_current:
-    config = load_yaml_config("sp500_opportunity.yaml")
-    start = pd.Timestamp(config["history"]["default_start_date"]).date()
-    with st.spinner("Actualizando histórico y score..."):
+    spinner_text = (
+        "Reconstruyendo fuentes e histórico completo..."
+        if force_refresh
+        else "Actualizando las últimas sesiones disponibles..."
+    )
+    with st.spinner(spinner_text):
         try:
-            _update_history(start, date.today(), force=force_refresh)
-            st.success("Indicador actualizado.")
+            refreshed = _refresh_current(force_sources=force_refresh)
+            latest_session = (
+                pd.to_datetime(refreshed["date"]).max().date()
+                if not refreshed.empty
+                else None
+            )
+            action = "Fuentes reconstruidas" if force_refresh else "Indicador actualizado"
+            st.success(f"{action}. Última sesión disponible: {latest_session or 'N/A'}.")
         except Exception as exc:
             st.error(f"No se pudo actualizar: {exc}")
 

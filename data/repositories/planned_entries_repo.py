@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from data.database import PlannedEntryLevelORM
@@ -26,6 +26,9 @@ class PlannedEntriesRepository:
         rearm_distance_pct: float,
         notes: str | None = None,
         expires_at: date | None = None,
+        import_source: str | None = None,
+        external_reference: str | None = None,
+        import_batch_id: str | None = None,
     ) -> PlannedEntryLevelORM:
         entity = PlannedEntryLevelORM(
             asset_id=asset_id,
@@ -37,11 +40,38 @@ class PlannedEntriesRepository:
             rearm_distance_pct=rearm_distance_pct,
             notes=notes,
             expires_at=expires_at,
+            import_source=import_source,
+            external_reference=external_reference,
+            import_batch_id=import_batch_id,
             status="active",
         )
         self.session.add(entity)
         self.session.flush()
         return entity
+
+    def get_by_external_reference(
+        self, import_source: str, external_reference: str
+    ) -> PlannedEntryLevelORM | None:
+        statement = select(PlannedEntryLevelORM).where(
+            PlannedEntryLevelORM.import_source == import_source,
+            PlannedEntryLevelORM.external_reference == external_reference,
+        )
+        return self.session.scalar(statement)
+
+    def find_matching_level(
+        self,
+        *,
+        asset_id: int,
+        target_price: float,
+        precision: int = 6,
+    ) -> PlannedEntryLevelORM | None:
+        statement = select(PlannedEntryLevelORM).where(
+            PlannedEntryLevelORM.asset_id == asset_id,
+            func.round(PlannedEntryLevelORM.target_price, precision)
+            == round(float(target_price), precision),
+            PlannedEntryLevelORM.status.in_(("active", "triggered", "paused")),
+        )
+        return self.session.scalar(statement)
 
     def get(self, level_id: int) -> PlannedEntryLevelORM | None:
         return self.session.get(PlannedEntryLevelORM, level_id)

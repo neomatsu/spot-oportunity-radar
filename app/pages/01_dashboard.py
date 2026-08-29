@@ -11,269 +11,243 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from app.components.dashboard import (  # noqa: E402
+    dashboard_styles,
+    detector_card_html,
+    detector_sparkline,
+    portfolio_metrics_html,
+)
 from data.database import session_scope  # noqa: E402
-from services.watchlist_service import WatchlistService  # noqa: E402
+from services.dashboard_service import DashboardService, DashboardSnapshot  # noqa: E402
 
-_RECOMMENDATION_LABELS = {
+RECOMMENDATION_LABELS = {
     "BUY_CANDIDATE": "Comprar",
     "WATCH": "Vigilar",
-    "AVOID": "Evitar",
 }
 
-_COL = {
-    "symbol": "Símbolo",
-    "name": "Nombre",
-    "asset_type": "Tipo",
-    "data_mode": "Modo",
-    "freshness_status": "Frescura",
-    "risk_level": "Riesgo",
-    "technical_score": "T. Score",
-    "risk_score": "R. Score",
-    "portfolio_fit_score": "PF Score",
-    "final_opportunity_score": "Score final",
-    "recommendation": "Recomendación",
-    "suggested_weight_add": "Peso sugerido",
-    "last_price": "Precio",
-    "suggested_buy_low": "Compra mín.",
-    "suggested_buy_high": "Compra máx.",
+SEVERITY_LABELS = {
+    "critical": "Crítica",
+    "high": "Alta",
+    "warning": "Aviso",
+    "info": "Info",
 }
 
-# Colores semánticos para scores (verde ≥70, naranja 45-70, rojo <45)
-def _score_color(val: float) -> str:
-    if val >= 70:
-        return "color: #16a34a; font-weight: 600"
-    if val >= 45:
-        return "color: #d97706; font-weight: 600"
-    return "color: #dc2626; font-weight: 600"
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_dashboard() -> DashboardSnapshot:
+    with session_scope() as session:
+        return DashboardService(session).build()
 
 
-def _style_scores(df: pd.DataFrame, score_cols: list[str]) -> pd.io.formats.style.Styler:
-    """Aplica color semántico a columnas de score y colorea filas por recomendación."""
-    def row_bg(row: pd.Series) -> list[str]:
-        rec = row.get("Recomendación", "")
-        if rec == "Comprar":
-            bg = "background-color: rgba(22, 163, 74, 0.10)"
-        elif rec == "Vigilar":
-            bg = "background-color: rgba(217, 119, 6, 0.10)"
-        elif rec == "Evitar":
-            bg = "background-color: rgba(220, 38, 38, 0.10)"
-        else:
-            bg = ""
-        return [bg] * len(row)
+def _money(value: float) -> str:
+    return f"{value:,.2f} €"
 
-    styler = df.style.apply(row_bg, axis=1)
-    for col in score_cols:
-        if col in df.columns:
-            styler = styler.map(
-                lambda v: _score_color(float(v)) if v is not None and str(v) not in ("", "nan") else "",
-                subset=[col],
+
+def _score_style(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    score = float(value)
+    if score >= 70:
+        return "color:#15803d;font-weight:700"
+    if score >= 45:
+        return "color:#d97706;font-weight:700"
+    return "color:#dc2626;font-weight:700"
+
+
+def _job_status(snapshot: DashboardSnapshot) -> tuple[str, str]:
+    if snapshot.last_job is None:
+        return "Sin ejecuciones registradas", "#94a3b8"
+    run = snapshot.last_job
+    timestamp = run.finished_at.strftime("%d/%m/%Y %H:%M") if run.finished_at else "en curso"
+    if run.status == "success" and run.errors == 0:
+        return f"Último job {timestamp} · correcto", "#16a34a"
+    if run.status == "running":
+        return f"Job iniciado {timestamp}", "#d97706"
+    return f"Último job {timestamp} · {run.status}", "#dc2626"
+
+
+st.set_page_config(page_title="Dashboard · Spot Opportunity Radar", layout="wide")
+st.html(dashboard_styles())
+
+with st.spinner("Leyendo el estado persistido del radar..."):
+    snapshot = _load_dashboard()
+
+title_col, status_col = st.columns([2, 1])
+with title_col:
+    st.markdown('<div class="dashboard-kicker">Decision cockpit</div>', unsafe_allow_html=True)
+    st.title("Dashboard")
+    st.markdown(
+        '<div class="dashboard-subtitle">Contexto de mercado, cartera y próximas decisiones.</div>',
+        unsafe_allow_html=True,
+    )
+with status_col:
+    status_text, status_color = _job_status(snapshot)
+    st.markdown(
+        f'<div class="status-line"><span class="status-dot" '
+        f'style="background:{status_color}"></span>{status_text}</div>',
+        unsafe_allow_html=True,
+    )
+    freshness = (
+        "Todos los activos con datos reales y frescos"
+        if snapshot.stale_assets == 0
+        else f"{snapshot.stale_assets} activos requieren revisar datos"
+    )
+    st.caption(freshness)
+
+st.subheader("Pulso de mercado")
+market_columns = st.columns(2, gap="large")
+detectors = (
+    (snapshot.bitcoin, "pages/10_bitcoin_opportunity.py", "Abrir Bitcoin Opportunity"),
+    (snapshot.sp500, "pages/11_sp500_opportunity.py", "Abrir S&P 500 Opportunity"),
+)
+for column, (detector, page, link_label) in zip(market_columns, detectors, strict=True):
+    with column:
+        with st.container(border=True):
+            st.html(detector_card_html(detector))
+            st.plotly_chart(
+                detector_sparkline(detector),
+                width="stretch",
+                config={"displayModeBar": False},
             )
-    return styler
+            st.page_link(page, label=link_label, use_container_width=True)
 
-
-st.title("Dashboard")
-
-with session_scope() as session:
-    watchlist_service = WatchlistService(session)
-    signals_df = pd.DataFrame(watchlist_service.get_watchlist_rows())
-    positions_df = pd.DataFrame(watchlist_service.get_positions_rows())
-
-available_signals = (
-    signals_df.dropna(subset=["final_opportunity_score"]).copy()
-    if not signals_df.empty
-    else pd.DataFrame()
-)
-buy_df = (
-    available_signals[available_signals["recommendation"] == "BUY_CANDIDATE"]
-    if not available_signals.empty
-    else pd.DataFrame()
-)
-watch_df = (
-    available_signals[available_signals["recommendation"] == "WATCH"]
-    if not available_signals.empty
-    else pd.DataFrame()
-)
-
-# --- Métricas de resumen ---
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Activos vigilados", len(signals_df))
-col2.metric("Con señal", len(available_signals))
-col3.metric("Candidatos compra", len(buy_df))
-col4.metric(
-    "Peso invertido",
-    f"{positions_df['current_weight'].sum() * 100:.1f}%" if not positions_df.empty else "0.0%",
-)
-
-if available_signals.empty:
-    st.warning(
-        "Todavía no hay señales. Ejecuta la actualización desde la portada o usa "
-        "`python -m jobs.refresh_prices` y `python -m jobs.generate_signals`."
+st.subheader("Tu cartera")
+portfolio = snapshot.portfolio
+st.html(
+    portfolio_metrics_html(
+        [
+            ("Capital total", _money(portfolio.total_capital), None),
+            ("Valor actual", _money(portfolio.market_value), None),
+            (
+                "P&L",
+                _money(portfolio.pnl),
+                f"{portfolio.pnl_pct:+.2f}%" if portfolio.pnl_pct is not None else None,
+            ),
+            ("Cash estimado", _money(portfolio.estimated_cash), None),
+            ("Exposición", f"{portfolio.exposure_pct:.1f}%", None),
+            ("Posiciones", str(portfolio.positions_count), None),
+        ]
     )
-else:
-    top_records = WatchlistService.top_opportunities(
-        available_signals.to_dict(orient="records"), limit=10
-    )
-    top_df = pd.DataFrame(top_records)
-    if "recommendation" in top_df.columns:
-        top_df["recommendation"] = (
-            top_df["recommendation"].map(_RECOMMENDATION_LABELS).fillna(top_df["recommendation"])
-        )
+)
 
-    ranking_col, risk_col = st.columns([1.5, 1])
-
-    with ranking_col:
-        st.subheader("Top oportunidades")
-        ranking_display = (
-            top_df[[
-                "symbol", "name", "asset_type",
-                "technical_score", "risk_score", "portfolio_fit_score",
-                "final_opportunity_score", "recommendation", "suggested_weight_add",
-            ]].rename(columns=_COL)
+content_columns = st.columns([1.65, 1], gap="large")
+with content_columns[0]:
+    st.subheader("Oportunidades prioritarias")
+    if not snapshot.opportunities:
+        st.info("No hay candidatos de compra o vigilancia con score disponible.")
+    else:
+        opportunities = pd.DataFrame(snapshot.opportunities)
+        opportunities["recommendation"] = opportunities["recommendation"].map(
+            RECOMMENDATION_LABELS
         )
+        display = opportunities[
+            [
+                "symbol",
+                "name",
+                "final_opportunity_score",
+                "risk_score",
+                "recommendation",
+                "suggested_weight_add",
+            ]
+        ].rename(
+            columns={
+                "symbol": "Símbolo",
+                "name": "Nombre",
+                "final_opportunity_score": "Score",
+                "risk_score": "Riesgo",
+                "recommendation": "Decisión",
+                "suggested_weight_add": "Peso sugerido",
+            }
+        )
+        styled = display.style.map(_score_style, subset=["Score"])
         st.dataframe(
-            _style_scores(ranking_display, ["T. Score", "Score final", "R. Score", "PF Score"]),
-            use_container_width=True,
+            styled,
             hide_index=True,
+            width="stretch",
+            height=390,
             column_config={
-                "T. Score": st.column_config.NumberColumn("T. Score", format="%.1f"),
-                "R. Score": st.column_config.NumberColumn("R. Score", format="%.1f"),
-                "PF Score": st.column_config.NumberColumn("PF Score", format="%.1f"),
-                "Score final": st.column_config.NumberColumn("Score final", format="%.1f"),
-                "Peso sugerido": st.column_config.NumberColumn("Peso sugerido", format="%.1%"),
+                "Score": st.column_config.NumberColumn(format="%.1f"),
+                "Riesgo": st.column_config.NumberColumn(format="%.1f"),
+                "Peso sugerido": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )
-        st.plotly_chart(
-            px.bar(
-                top_df,
-                x="symbol",
-                y="final_opportunity_score",
-                color="recommendation",
-                color_discrete_map={
-                    "Comprar": "#16a34a",
-                    "Vigilar": "#d97706",
-                    "Evitar": "#dc2626",
-                },
-                labels={
-                    "final_opportunity_score": "Score final",
-                    "symbol": "Símbolo",
-                    "recommendation": "",
-                },
-                title="Ranking por score final",
-            ),
-            use_container_width=True,
-        )
-
-    with risk_col:
-        st.subheader("Comparativa de scores")
-        heatmap_df = top_df[["symbol", "technical_score", "portfolio_fit_score"]].copy()
-        heatmap_df["seguridad"] = 100 - top_df["risk_score"]
-        heatmap_df = heatmap_df.rename(columns={
-            "technical_score": "Técnico",
-            "portfolio_fit_score": "Portfolio fit",
-            "seguridad": "Seguridad",
-        }).set_index("symbol")
-        st.plotly_chart(
-            px.imshow(
-                heatmap_df.T,
-                aspect="auto",
-                color_continuous_scale="RdYlGn",
-                zmin=0,
-                zmax=100,
-                title="Verde = favorable (Seguridad = 100 − R.Score)",
-            ),
-            use_container_width=True,
-        )
-
-    # --- Comprar / Vigilar ---
-    split_col1, split_col2 = st.columns(2)
-    with split_col1:
-        st.subheader("Comprar ahora")
-        if buy_df.empty:
-            st.info("No hay candidatos de compra en este momento.")
-        else:
-            buy_display = (
-                buy_df[[
-                    "symbol", "name", "last_price", "risk_level",
-                    "final_opportunity_score", "suggested_buy_low",
-                    "suggested_buy_high", "suggested_weight_add",
-                ]]
-                .sort_values("final_opportunity_score", ascending=False)
-                .rename(columns=_COL)
-            )
-            st.dataframe(
-                _style_scores(buy_display, ["Score final"]),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    with split_col2:
-        st.subheader("En vigilancia")
-        if watch_df.empty:
-            st.info("No hay activos en vigilancia en este momento.")
-        else:
-            watch_display = (
-                watch_df[[
-                    "symbol", "name", "last_price", "risk_level",
-                    "final_opportunity_score", "suggested_buy_low", "suggested_buy_high",
-                ]]
-                .sort_values("final_opportunity_score", ascending=False)
-                .rename(columns=_COL)
-            )
-            st.dataframe(
-                _style_scores(watch_display, ["Score final"]),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-# --- Portfolio overview ---
-st.subheader("Portfolio overview")
-if positions_df.empty:
-    st.info("No hay posiciones registradas todavía.")
-else:
-    exposure_by_sector = positions_df.groupby("sector", as_index=False)["current_weight"].sum()
-    st.plotly_chart(
-        px.pie(
-            exposure_by_sector,
-            names="sector",
-            values="current_weight",
-            title="Exposición por sector",
-            color_discrete_sequence=px.colors.qualitative.Set2,
+    st.page_link(
+        "pages/02_watchlist.py",
+        label=(
+            f"Ver watchlist completa · {snapshot.ready_assets}/"
+            f"{snapshot.watched_assets} con señal"
         ),
         use_container_width=True,
     )
 
-# --- Todas las señales ---
-st.subheader("Todas las señales")
-if available_signals.empty:
-    st.info("Todavía no hay señales.")
-else:
-    if "recommendation" in available_signals.columns:
-        available_signals["recommendation"] = (
-            available_signals["recommendation"]
-            .map(_RECOMMENDATION_LABELS)
-            .fillna(available_signals["recommendation"])
+with content_columns[1]:
+    st.subheader("Composición actual")
+    allocation = list(portfolio.allocation)
+    cash_weight = max(0.0, 1.0 - portfolio.exposure_pct / 100)
+    if cash_weight > 0:
+        allocation.append({"symbol": "Cash", "weight": cash_weight})
+    if not allocation:
+        st.info("No hay posiciones registradas.")
+    else:
+        allocation_frame = pd.DataFrame(allocation)
+        figure = px.pie(
+            allocation_frame,
+            names="symbol",
+            values="weight",
+            hole=0.68,
+            color_discrete_sequence=[
+                "#2563eb",
+                "#0f766e",
+                "#d97706",
+                "#be123c",
+                "#64748b",
+                "#8b5cf6",
+            ],
         )
-    recent_display = (
-        available_signals[[
-            "symbol", "name", "asset_type", "freshness_status", "risk_level",
-            "technical_score", "risk_score", "portfolio_fit_score",
-            "final_opportunity_score", "recommendation", "suggested_weight_add",
-        ]]
-        .sort_values("final_opportunity_score", ascending=False, na_position="last")
-        .rename(columns=_COL)
+        figure.update_traces(textposition="inside", textinfo="label+percent")
+        figure.update_layout(
+            height=350,
+            margin={"l": 5, "r": 5, "t": 5, "b": 5},
+            showlegend=False,
+        )
+        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    st.caption(
+        f"Mayor posición {portfolio.largest_position_pct:.1f}% · "
+        f"Coste invertido {_money(portfolio.invested_cost)}"
     )
-    st.dataframe(
-        _style_scores(
-            recent_display,
-            ["T. Score", "R. Score", "PF Score", "Score final"],
-        ),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "T. Score": st.column_config.NumberColumn("T. Score", format="%.1f"),
-            "R. Score": st.column_config.NumberColumn("R. Score", format="%.1f"),
-            "PF Score": st.column_config.NumberColumn("PF Score", format="%.1f"),
-            "Score final": st.column_config.NumberColumn("Score final", format="%.1f"),
-            "Peso sugerido": st.column_config.NumberColumn("Peso sugerido", format="%.1%"),
-        },
+    st.page_link("pages/04_portfolio.py", label="Abrir portfolio", use_container_width=True)
+
+st.subheader("Posiciones y niveles que requieren atención")
+if not snapshot.attention_items:
+    st.info("No hay alertas relevantes nuevas durante los últimos 7 días.")
+else:
+    attention = pd.DataFrame(snapshot.attention_items)
+    attention["severity"] = attention["severity"].map(SEVERITY_LABELS).fillna(
+        attention["severity"]
+    )
+    attention["created_at"] = pd.to_datetime(attention["created_at"]).dt.strftime(
+        "%d/%m/%Y %H:%M"
+    )
+    attention = attention.rename(
+        columns={
+            "symbol": "Símbolo",
+            "alert_type": "Tipo",
+            "severity": "Severidad",
+            "title": "Alerta",
+            "action": "Acción sugerida",
+            "created_at": "Fecha",
+        }
+    )
+    st.dataframe(attention, hide_index=True, width="stretch")
+st.page_link("pages/05_alerts.py", label="Abrir centro de alertas", use_container_width=True)
+
+with st.expander("Estado operativo", expanded=False):
+    status_columns = st.columns(4)
+    status_columns[0].metric("Activos vigilados", snapshot.watched_assets)
+    status_columns[1].metric("Con señal", snapshot.ready_assets)
+    status_columns[2].metric("BUY_CANDIDATE", snapshot.buy_candidates)
+    status_columns[3].metric("Datos a revisar", snapshot.stale_assets)
+    st.caption(
+        "El Dashboard es de solo lectura y utiliza SQLite. Las descargas y recálculos "
+        "se realizan desde el job diario o desde las páginas especializadas."
     )
