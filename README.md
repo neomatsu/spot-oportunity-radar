@@ -1230,14 +1230,16 @@ watchlist, no modifica la cartera y no genera alertas.
 
 ## Volume Profile Lab
 
-La pagina experimental `Volume Profile Lab` calcula un perfil de volumen estimado a partir de
-las barras OHLCV diarias ya presentes en SQLite. Reparte uniformemente el volumen de cada vela
-entre los bins atravesados desde Low hasta High, muestra candles y perfil horizontal, e
-identifica POC y High Volume Nodes relevantes.
+La pagina experimental `Volume Profile Lab` calcula un perfil de volumen estimado. Para stocks
+y ETFs utiliza las barras OHLCV diarias presentes en SQLite. Para crypto descarga velas
+intradia de Binance y las conserva en la tabla independiente `price_bars_intraday`: usa `5m`
+para rangos de hasta 35 dias, `15m` hasta 190 dias, `1h` hasta 400 dias y `4h` para periodos
+mayores. La lectura es cache-first y las actualizaciones posteriores son incrementales.
 
-El resultado es un proxy visual, no volumen intradia real negociado por precio. El laboratorio
-no consulta providers, no guarda resultados y no modifica scoring, soportes, recomendaciones,
-alertas ni backtesting.
+El volumen de cada vela se reparte entre los bins atravesados desde Low hasta High. Por tanto,
+incluso con velas de cinco minutos sigue siendo un proxy y no volumen real negociado por
+precio. La tabla intradia no alimenta el pipeline diario y no modifica scoring, soportes,
+recomendaciones, alertas ni backtesting.
 
 ## Bitcoin Opportunity Detector
 

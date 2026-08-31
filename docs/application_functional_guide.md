@@ -534,17 +534,20 @@ watchlist ni modifican la cartera.
 
 ### 10.12 Volume Profile Lab
 
-Laboratorio visual que construye un `Estimated Volume Profile` usando exclusivamente barras
-OHLCV diarias ya almacenadas en SQLite. El usuario elige activo, periodo, numero de bins y
-numero maximo de HVN. El volumen de cada vela se reparte uniformemente entre los intervalos de
-precio atravesados entre Low y High.
+Laboratorio visual que construye un `Estimated Volume Profile`. El usuario elige activo,
+periodo predefinido o fechas personalizadas, numero de bins y numero maximo de HVN. Para stocks
+y ETFs usa las barras OHLCV diarias de SQLite. Para crypto emplea velas Binance cacheadas en
+`price_bars_intraday`, con timeframe adaptativo: `5m` hasta 35 dias, `15m` hasta 190 dias,
+`1h` hasta 400 dias y `4h` para rangos superiores. La primera consulta descarga el tramo y las
+siguientes solo incorporan velas nuevas o cobertura anterior ausente.
 
 La pagina muestra candles y un histograma horizontal alineado con el precio, identifica el POC
 y agrupa maximos locales relevantes como High Volume Nodes. Incluye tabla con centro, rango,
 volumen estimado, intensidad relativa y distancia al precio actual.
 
-No representa volumen intradia real por precio. No descarga datos, no persiste resultados y no
-modifica soportes, scoring, recomendaciones, alertas ni backtesting.
+No representa volumen real negociado por precio: reparte el volumen de cada vela entre su Low
+y High. La persistencia intradia esta fisicamente separada de `price_bars_daily`; ningun
+calculo de soportes, scoring, recomendaciones, alertas o backtesting consume esta tabla.
 
 ## 11. Alertas
 

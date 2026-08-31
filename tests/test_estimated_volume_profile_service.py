@@ -69,6 +69,14 @@ def test_default_sensitivity_keeps_meaningful_secondary_volume_node() -> None:
     assert all(node.relative_intensity >= 0.40 for node in result.hvns)
 
 
+def test_locally_prominent_peak_can_qualify_below_absolute_intensity() -> None:
+    service = EstimatedVolumeProfileService()
+
+    assert service._is_significant_peak(intensity=0.35, prominence=0.34)
+    assert not service._is_significant_peak(intensity=0.35, prominence=0.10)
+    assert not service._is_significant_peak(intensity=0.20, prominence=0.19)
+
+
 def test_distances_and_table_rows_use_current_close() -> None:
     service = EstimatedVolumeProfileService(
         min_hvn_intensity=0.2,

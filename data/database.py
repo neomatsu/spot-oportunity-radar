@@ -51,6 +51,9 @@ class AssetORM(Base):
     quote_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     prices: Mapped[list[PriceBarDailyORM]] = relationship(back_populates="asset")
+    intraday_prices: Mapped[list[PriceBarIntradayORM]] = relationship(
+        back_populates="asset"
+    )
     technical_snapshots: Mapped[list[TechnicalSnapshotORM]] = relationship(
         back_populates="asset"
     )
@@ -100,6 +103,37 @@ class PriceBarDailyORM(Base):
     inserted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     asset: Mapped[AssetORM] = relationship(back_populates="prices")
+
+
+class PriceBarIntradayORM(Base):
+    __tablename__ = "price_bars_intraday"
+    __table_args__ = (
+        UniqueConstraint(
+            "asset_id",
+            "market",
+            "interval",
+            "open_time",
+            name="uq_intraday_price_asset_market_interval_time",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"), index=True)
+    market: Mapped[str] = mapped_column(String(30), default="spot", index=True)
+    interval: Mapped[str] = mapped_column(String(10), index=True)
+    open_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float)
+    provider: Mapped[str] = mapped_column(String(40), default="binance")
+    quote_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    inserted_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    asset: Mapped[AssetORM] = relationship(back_populates="intraday_prices")
 
 
 class TechnicalSnapshotORM(Base):
@@ -747,6 +781,17 @@ def ensure_schema_migrations() -> None:
     with engine.begin() as connection:
         inspector = inspect(connection)
         table_names = set(inspector.get_table_names())
+
+        # Intraday bars are a rebuildable cache. Recreate the early schema so
+        # spot and USD-M Futures can never collide on symbol/time.
+        if "price_bars_intraday" in table_names:
+            intraday_columns = {
+                column["name"]
+                for column in inspector.get_columns("price_bars_intraday")
+            }
+            if "market" not in intraday_columns:
+                connection.execute(text("DROP TABLE price_bars_intraday"))
+                PriceBarIntradayORM.__table__.create(bind=connection)
 
         if "price_bars_daily" in table_names:
             price_columns = {

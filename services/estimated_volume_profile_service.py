@@ -41,6 +41,8 @@ class EstimatedVolumeProfileService:
         *,
         min_hvn_intensity: float = 0.40,
         min_hvn_prominence: float = 0.07,
+        min_local_hvn_intensity: float = 0.25,
+        min_local_prominence_ratio: float = 0.50,
         min_hvn_separation_ratio: float = 0.035,
         zone_peak_ratio: float = 0.65,
     ) -> None:
@@ -48,12 +50,18 @@ class EstimatedVolumeProfileService:
             raise ValueError("min_hvn_intensity must be between 0 and 1")
         if not 0.0 <= min_hvn_prominence <= 1.0:
             raise ValueError("min_hvn_prominence must be between 0 and 1")
+        if not 0.0 <= min_local_hvn_intensity <= 1.0:
+            raise ValueError("min_local_hvn_intensity must be between 0 and 1")
+        if not 0.0 <= min_local_prominence_ratio <= 1.0:
+            raise ValueError("min_local_prominence_ratio must be between 0 and 1")
         if min_hvn_separation_ratio <= 0:
             raise ValueError("min_hvn_separation_ratio must be positive")
         if not 0.0 < zone_peak_ratio <= 1.0:
             raise ValueError("zone_peak_ratio must be between 0 and 1")
         self.min_hvn_intensity = min_hvn_intensity
         self.min_hvn_prominence = min_hvn_prominence
+        self.min_local_hvn_intensity = min_local_hvn_intensity
+        self.min_local_prominence_ratio = min_local_prominence_ratio
         self.min_hvn_separation_ratio = min_hvn_separation_ratio
         self.zone_peak_ratio = zone_peak_ratio
 
@@ -185,14 +193,29 @@ class EstimatedVolumeProfileService:
     ) -> list[VolumeProfileNode]:
         intensity = profile["normalized_intensity"].to_numpy(dtype=float)
         minimum_separation = max(2, round(len(profile) * self.min_hvn_separation_ratio))
-        peaks, _ = find_peaks(
+        peaks, properties = find_peaks(
             intensity,
-            height=self.min_hvn_intensity,
+            height=min(self.min_hvn_intensity, self.min_local_hvn_intensity),
             prominence=self.min_hvn_prominence,
             distance=minimum_separation,
         )
+        prominence_by_peak = {
+            int(index): float(prominence)
+            for index, prominence in zip(
+                peaks,
+                properties["prominences"],
+                strict=True,
+            )
+        }
         ordered_peaks = sorted(
-            (int(index) for index in peaks),
+            (
+                int(index)
+                for index in peaks
+                if self._is_significant_peak(
+                    intensity=float(intensity[index]),
+                    prominence=prominence_by_peak[int(index)],
+                )
+            ),
             key=lambda index: float(intensity[index]),
             reverse=True,
         )
@@ -222,6 +245,13 @@ class EstimatedVolumeProfileService:
             if len(nodes) >= max_hvns:
                 break
         return nodes
+
+    def _is_significant_peak(self, *, intensity: float, prominence: float) -> bool:
+        if intensity >= self.min_hvn_intensity:
+            return True
+        if intensity < self.min_local_hvn_intensity or intensity <= 0:
+            return False
+        return prominence / intensity >= self.min_local_prominence_ratio
 
     def _expand_peak(self, intensity: np.ndarray, peak_index: int) -> tuple[int, int]:
         floor = max(

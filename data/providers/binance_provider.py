@@ -13,6 +13,19 @@ class BinanceProvider(MarketDataProvider):
     name = "binance"
     base_url = "https://api.binance.com/api/v3/klines"
     daily_interval_ms = 86_400_000
+    interval_ms = {
+        "1m": 60_000,
+        "3m": 180_000,
+        "5m": 300_000,
+        "15m": 900_000,
+        "30m": 1_800_000,
+        "1h": 3_600_000,
+        "2h": 7_200_000,
+        "4h": 14_400_000,
+        "6h": 21_600_000,
+        "8h": 28_800_000,
+        "12h": 43_200_000,
+    }
 
     def supports(self, asset: AssetORM) -> bool:
         return asset.asset_type == "crypto"
@@ -72,6 +85,51 @@ class BinanceProvider(MarketDataProvider):
 
         return self._payload_to_frame(asset.symbol, payload)
 
+    def fetch_intraday_prices(
+        self,
+        asset: AssetORM,
+        *,
+        interval: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> pd.DataFrame:
+        """Download an inclusive intraday range using Binance's 1,000-row pages."""
+        if not self.supports(asset):
+            raise ProviderError("Binance intraday data is only supported for crypto assets")
+        if interval not in self.interval_ms:
+            raise ValueError(f"Unsupported Binance intraday interval: {interval}")
+        if start_at > end_at:
+            raise ValueError("start_at must be before end_at")
+
+        cursor_ms = self._datetime_ms(start_at)
+        end_ms = self._datetime_ms(end_at)
+        step_ms = self.interval_ms[interval]
+        payload: list[list] = []
+
+        while cursor_ms <= end_ms:
+            page = self._get_klines(
+                {
+                    "symbol": asset.symbol,
+                    "interval": interval,
+                    "startTime": cursor_ms,
+                    "endTime": end_ms,
+                    "limit": 1000,
+                }
+            )
+            if not page:
+                break
+            payload.extend(page)
+            next_cursor_ms = int(page[-1][0]) + step_ms
+            if next_cursor_ms <= cursor_ms:
+                raise ProviderError(
+                    f"Binance intraday pagination did not advance for {asset.symbol}."
+                )
+            cursor_ms = next_cursor_ms
+            if len(page) < 1000:
+                break
+
+        return self._payload_to_intraday_frame(asset.symbol, payload)
+
     def _get_klines(self, params: dict[str, object]) -> list:
         try:
             if self.http_client is not None:
@@ -90,6 +148,15 @@ class BinanceProvider(MarketDataProvider):
     @staticmethod
     def _start_of_day_ms(value: date) -> int:
         instant = datetime.combine(value, time.min, tzinfo=UTC)
+        return int(instant.timestamp() * 1000)
+
+    @staticmethod
+    def _datetime_ms(value: datetime) -> int:
+        instant = pd.Timestamp(value)
+        if instant.tzinfo is None:
+            instant = instant.tz_localize(UTC)
+        else:
+            instant = instant.tz_convert(UTC)
         return int(instant.timestamp() * 1000)
 
     @staticmethod
@@ -112,3 +179,27 @@ class BinanceProvider(MarketDataProvider):
             ]
         )
         return frame.sort_values("date").drop_duplicates("date", keep="last").dropna()
+
+    @staticmethod
+    def _payload_to_intraday_frame(symbol: str, payload: list) -> pd.DataFrame:
+        if not isinstance(payload, list) or not payload:
+            raise ProviderError(f"Binance returned no intraday series for {symbol}.")
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "open_time": pd.to_datetime(item[0], unit="ms", utc=True),
+                    "open": float(item[1]),
+                    "high": float(item[2]),
+                    "low": float(item[3]),
+                    "close": float(item[4]),
+                    "volume": float(item[5]),
+                }
+                for item in payload
+            ]
+        )
+        return (
+            frame.sort_values("open_time")
+            .drop_duplicates("open_time", keep="last")
+            .dropna()
+        )
