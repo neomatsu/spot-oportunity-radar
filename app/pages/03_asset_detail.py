@@ -25,6 +25,7 @@ from data.repositories.assets_repo import AssetsRepository  # noqa: E402
 from data.repositories.planned_entries_repo import PlannedEntriesRepository  # noqa: E402
 from data.repositories.prices_repo import PricesRepository  # noqa: E402
 from services.historical_score_service import HistoricalScoreService  # noqa: E402
+from services.live_quote_service import LiveQuoteService  # noqa: E402
 from services.planned_entry_service import PlannedEntryService  # noqa: E402
 from services.support_detection_service import SupportDetectionService  # noqa: E402
 from services.technical_service import TechnicalService  # noqa: E402
@@ -37,22 +38,38 @@ RANGE_OPTIONS = {
     "6 meses": 182,
     "3 meses": 91,
 }
-PLANNED_ENTRY_DEFAULTS = load_yaml_config("planned_entries.yaml").get(
-    "planned_entries", {}
-)
+PLANNED_ENTRY_DEFAULTS = load_yaml_config("planned_entries.yaml").get("planned_entries", {})
 
 st.title("Asset Detail")
 
 with session_scope() as session:
     assets = AssetsRepository(session).list_enabled()
     asset_options = {f"{asset.symbol} — {asset.name}": asset for asset in assets}
-    selected_label = st.selectbox("Seleccionar activo", list(asset_options) if asset_options else [])
+    selected_label = st.selectbox(
+        "Seleccionar activo", list(asset_options) if asset_options else []
+    )
 
     if not selected_label:
         st.info("No hay activos disponibles.")
     else:
         asset = asset_options[selected_label]
+        quote_service = LiveQuoteService(session)
+        if st.button(
+            "Actualizar precio actual",
+            key=f"refresh_live_quote_{asset.id}",
+            type="primary",
+            help="Consulta Yahoo Finance o Binance sin modificar las velas diarias cerradas.",
+        ):
+            try:
+                with st.spinner(f"Consultando cotización actual de {asset.symbol}..."):
+                    quote_service.refresh_asset(asset)
+                    session.commit()
+                st.success("Precio actual actualizado.")
+            except Exception as exc:
+                st.error(f"No se pudo actualizar el precio actual: {exc}")
+
         price_frame = PricesRepository(session).get_asset_prices(asset.id)
+        live_quote = quote_service.get(asset.id)
         technical = session.scalar(
             select(TechnicalSnapshotORM)
             .where(TechnicalSnapshotORM.asset_id == asset.id)
@@ -69,8 +86,20 @@ with session_scope() as session:
             select(AssetDataStatusORM).where(AssetDataStatusORM.asset_id == asset.id).limit(1)
         )
 
-        last_price = float(price_frame["close"].iloc[-1]) if not price_frame.empty else None
-        last_price_date = price_frame["date"].iloc[-1] if not price_frame.empty else None
+        closed_price = float(price_frame["close"].iloc[-1]) if not price_frame.empty else None
+        closed_price_date = price_frame["date"].iloc[-1] if not price_frame.empty else None
+        last_price = float(live_quote.price) if live_quote is not None else closed_price
+        last_price_date = live_quote.as_of if live_quote is not None else closed_price_date
+        price_time_label = (
+            pd.Timestamp(last_price_date)
+            .tz_localize("UTC")
+            .tz_convert("Europe/Madrid")
+            .strftime("%d/%m/%Y %H:%M")
+            if live_quote is not None
+            else str(last_price_date)[:10]
+            if last_price_date is not None
+            else "N/A"
+        )
         planned_entries_repo = PlannedEntriesRepository(session)
         planned_levels = planned_entries_repo.list_for_asset(asset.id)
 
@@ -85,16 +114,28 @@ with session_scope() as session:
             f"{last_price:,.2f}" if last_price is not None else "N/A",
         )
         info_col4.metric(
-            "Fecha precio",
-            str(last_price_date)[:10] if last_price_date is not None else "N/A",
+            "Hora precio",
+            price_time_label,
         )
+        if live_quote is not None:
+            quote_kind = (
+                "sesión en curso"
+                if closed_price_date is None or live_quote.session_date > closed_price_date
+                else "última cotización consultada"
+            )
+            st.caption(
+                f"{quote_kind.capitalize()} · fuente {live_quote.provider} · "
+                "no forma parte de las velas diarias cerradas ni del scoring persistido."
+            )
 
         # --- Scores ---
         st.markdown("**Scores actuales**")
         score_col1, score_col2, score_col3, score_col4 = st.columns(4)
         score_col1.metric(
             "Technical score",
-            f"{technical.technical_score:.1f}" if technical and technical.technical_score else "N/A",
+            f"{technical.technical_score:.1f}"
+            if technical and technical.technical_score
+            else "N/A",
         )
         score_col2.metric("Risk score", f"{signal.risk_score:.1f}" if signal else "N/A")
         score_col3.metric("Final score", f"{signal.final_score:.1f}" if signal else "N/A")
@@ -110,17 +151,20 @@ with session_scope() as session:
             ds_col2.metric(
                 "Última barra",
                 str(data_status.last_available_bar_date)[:10]
-                if data_status and data_status.last_available_bar_date else "N/A",
+                if data_status and data_status.last_available_bar_date
+                else "N/A",
             )
             ds_col3.metric(
                 "Histórico desde",
                 str(data_status.historical_coverage_start)[:10]
-                if data_status and data_status.historical_coverage_start else "N/A",
+                if data_status and data_status.historical_coverage_start
+                else "N/A",
             )
             ds_col4.metric(
                 "Modo / Fuente",
                 f"{data_status.data_mode} / {data_status.last_refresh_source or '—'}"
-                if data_status else "N/A",
+                if data_status
+                else "N/A",
             )
 
         # --- Plan de entradas manuales ---
@@ -141,9 +185,7 @@ with session_scope() as session:
                     "% de capital sugerido",
                     min_value=0.0,
                     max_value=100.0,
-                    value=float(
-                        PLANNED_ENTRY_DEFAULTS.get("default_suggested_weight_pct", 5.0)
-                    ),
+                    value=float(PLANNED_ENTRY_DEFAULTS.get("default_suggested_weight_pct", 5.0)),
                     step=1.0,
                 )
                 suggested_capital = plan_col3.number_input(
@@ -156,17 +198,13 @@ with session_scope() as session:
                 tolerance_pct = rule_col1.number_input(
                     "Avisar a distancia (%)",
                     min_value=0.0,
-                    value=float(
-                        PLANNED_ENTRY_DEFAULTS.get("default_tolerance_pct", 1.0)
-                    ),
+                    value=float(PLANNED_ENTRY_DEFAULTS.get("default_tolerance_pct", 1.0)),
                     step=0.25,
                 )
                 rearm_distance_pct = rule_col2.number_input(
                     "Rearmar al alejarse (%)",
                     min_value=0.1,
-                    value=float(
-                        PLANNED_ENTRY_DEFAULTS.get("default_rearm_distance_pct", 3.0)
-                    ),
+                    value=float(PLANNED_ENTRY_DEFAULTS.get("default_rearm_distance_pct", 3.0)),
                     step=0.5,
                 )
                 use_expiry = rule_col3.checkbox("Usar fecha de expiración", value=False)
@@ -255,9 +293,12 @@ with session_scope() as session:
             st.warning("No hay histórico de precios para este activo.")
         else:
             price_frame["date"] = pd.to_datetime(price_frame["date"])
-            enriched = TechnicalService.compute_indicators(price_frame)
+            chart_price_frame = LiveQuoteService.append_provisional_bar(price_frame, live_quote)
+            chart_price_frame["date"] = pd.to_datetime(chart_price_frame["date"])
+            enriched = TechnicalService.compute_indicators(chart_price_frame)
+            closed_enriched = TechnicalService.compute_indicators(price_frame)
             support_service = SupportDetectionService()
-            support_zones = support_service.detect_support_zone(enriched)
+            support_zones = support_service.detect_support_zone(closed_enriched)
 
             # Selector de rango (junto al gráfico)
             range_label = st.selectbox(
@@ -284,6 +325,18 @@ with session_scope() as session:
                     name="OHLC",
                 )
             )
+            provisional_rows = display_frame[display_frame["is_provisional"]]
+            if not provisional_rows.empty:
+                price_fig.add_trace(
+                    go.Scatter(
+                        x=provisional_rows["date"],
+                        y=provisional_rows["close"],
+                        mode="markers",
+                        name="Precio en curso",
+                        marker=dict(color="#2563eb", size=11, symbol="diamond"),
+                        hovertemplate=("Sesión en curso<br>Precio %{y:,.4f}<extra></extra>"),
+                    )
+                )
             for label, color in [("ema20", "#f39c12"), ("sma50", "#3498db"), ("sma200", "#9b59b6")]:
                 price_fig.add_trace(
                     go.Scatter(
@@ -344,7 +397,9 @@ with session_scope() as session:
             st.plotly_chart(rsi_fig, use_container_width=True)
 
             # --- Soportes ---
-            zone_rows = support_service.build_zone_table_rows(support_zones, current_price=last_price)
+            zone_rows = support_service.build_zone_table_rows(
+                support_zones, current_price=last_price
+            )
             if zone_rows:
                 st.subheader("Soportes y resistencias")
                 zone_frame = pd.DataFrame(zone_rows).rename(
@@ -361,8 +416,9 @@ with session_scope() as session:
 
             # --- Score histórico ---
             history_service = HistoricalScoreService(session)
-            history_start = display_frame["date"].min().date()
-            history_end = display_frame["date"].max().date()
+            closed_display = display_frame[~display_frame["is_provisional"]]
+            history_start = closed_display["date"].min().date()
+            history_end = closed_display["date"].max().date()
             point_state_key = f"historical_score_point_{asset.id}"
             history_state_key = f"historical_score_history_{asset.id}_{range_label}"
 
@@ -387,7 +443,8 @@ with session_scope() as session:
             ):
                 with st.spinner("Calculando score histórico..."):
                     st.session_state[point_state_key] = history_service.get_score_as_of(
-                        asset, as_of_date=selected_history_date,
+                        asset,
+                        as_of_date=selected_history_date,
                     )
 
             history_controls = st.columns([2, 1])
@@ -399,7 +456,9 @@ with session_scope() as session:
             ):
                 with st.spinner("Calculando scores del período..."):
                     history_frame = history_service.get_score_history(
-                        asset, start_date=history_start, end_date=history_end,
+                        asset,
+                        start_date=history_start,
+                        end_date=history_end,
                     )
                     st.session_state[history_state_key] = history_frame.to_dict("records")
 
@@ -416,7 +475,7 @@ with session_scope() as session:
                 if breakdown:
                     st.markdown("**Desglose técnico**")
                     bd_cols = st.columns(4)
-                    items = [(k, v) for k, v in breakdown.items() if isinstance(v, (int, float))]
+                    items = [(k, v) for k, v in breakdown.items() if isinstance(v, int | float)]
                     for i, (k, v) in enumerate(items):
                         bd_cols[i % 4].metric(k.replace("_", " ").title(), f"{v:.1f}")
 
@@ -434,27 +493,46 @@ with session_scope() as session:
                 history_frame["date"] = pd.to_datetime(history_frame["date"])
                 score_fig = make_subplots(specs=[[{"secondary_y": True}]])
                 score_fig.add_trace(
-                    go.Scatter(x=history_frame["date"], y=history_frame["final_score"],
-                               mode="lines", name="Final score",
-                               line=dict(color="#1f77b4", width=2)), secondary_y=False,
+                    go.Scatter(
+                        x=history_frame["date"],
+                        y=history_frame["final_score"],
+                        mode="lines",
+                        name="Final score",
+                        line=dict(color="#1f77b4", width=2),
+                    ),
+                    secondary_y=False,
                 )
                 score_fig.add_trace(
-                    go.Scatter(x=history_frame["date"], y=history_frame["technical_score"],
-                               mode="lines", name="Technical score",
-                               line=dict(color="#2ca02c", width=1.8)), secondary_y=False,
+                    go.Scatter(
+                        x=history_frame["date"],
+                        y=history_frame["technical_score"],
+                        mode="lines",
+                        name="Technical score",
+                        line=dict(color="#2ca02c", width=1.8),
+                    ),
+                    secondary_y=False,
                 )
                 score_fig.add_trace(
-                    go.Scatter(x=history_frame["date"], y=history_frame["risk_score"],
-                               mode="lines", name="Risk score",
-                               line=dict(color="#d62728", width=1.8)), secondary_y=False,
+                    go.Scatter(
+                        x=history_frame["date"],
+                        y=history_frame["risk_score"],
+                        mode="lines",
+                        name="Risk score",
+                        line=dict(color="#d62728", width=1.8),
+                    ),
+                    secondary_y=False,
                 )
                 score_price_frame = display_frame[
                     display_frame["date"].dt.date.between(history_start, history_end)
                 ][["date", "close"]].copy()
                 score_fig.add_trace(
-                    go.Scatter(x=score_price_frame["date"], y=score_price_frame["close"],
-                               mode="lines", name="Precio",
-                               line=dict(color="#7f7f7f", width=1.4, dash="dot")),
+                    go.Scatter(
+                        x=score_price_frame["date"],
+                        y=score_price_frame["close"],
+                        mode="lines",
+                        name="Precio",
+                        line=dict(color="#7f7f7f", width=1.4, dash="dot"),
+                    ),
                     secondary_y=True,
                 )
                 score_fig.update_layout(height=360, margin=dict(t=40, b=20))
@@ -474,14 +552,16 @@ with session_scope() as session:
             st.subheader("Desglose del score")
             breakdown = signal.rationale_json.get("score_breakdown", {})
             if breakdown:
-                bd_items = [(k, v) for k, v in breakdown.items() if isinstance(v, (int, float))]
+                bd_items = [(k, v) for k, v in breakdown.items() if isinstance(v, int | float)]
                 bd_cols = st.columns(min(len(bd_items), 4))
                 for i, (k, v) in enumerate(bd_items):
                     bd_cols[i % 4].metric(k.replace("_", " ").title(), f"{v:.1f}")
             else:
                 breakdown_alt = signal.rationale_json.get("breakdown", {})
                 if breakdown_alt:
-                    bd_items = [(k, v) for k, v in breakdown_alt.items() if isinstance(v, (int, float))]
+                    bd_items = [
+                        (k, v) for k, v in breakdown_alt.items() if isinstance(v, int | float)
+                    ]
                     bd_cols = st.columns(min(len(bd_items), 4))
                     for i, (k, v) in enumerate(bd_items):
                         bd_cols[i % 4].metric(k.replace("_", " ").title(), f"{v:.1f}")
@@ -504,9 +584,15 @@ with session_scope() as session:
                             "SMA 200": f"{technical.sma200:.2f}" if technical.sma200 else "N/A",
                             "EMA 20": f"{technical.ema20:.2f}" if technical.ema20 else "N/A",
                             "ATR 14": f"{technical.atr14:.2f}" if technical.atr14 else "N/A",
-                            "Soporte bajo": f"{technical.support_low:.2f}" if technical.support_low else "N/A",
-                            "Soporte alto": f"{technical.support_high:.2f}" if technical.support_high else "N/A",
-                            "Dist. soporte %": f"{technical.distance_to_support_pct:.1f}%" if technical.distance_to_support_pct else "N/A",
+                            "Soporte bajo": f"{technical.support_low:.2f}"
+                            if technical.support_low
+                            else "N/A",
+                            "Soporte alto": f"{technical.support_high:.2f}"
+                            if technical.support_high
+                            else "N/A",
+                            "Dist. soporte %": f"{technical.distance_to_support_pct:.1f}%"
+                            if technical.distance_to_support_pct
+                            else "N/A",
                         }
                         for label, value in ind_data.items():
                             st.markdown(f"**{label}:** {value}")
@@ -515,12 +601,22 @@ with session_scope() as session:
                     with st.expander("Detalle de la recomendación", expanded=False):
                         rec_data = {
                             "Recomendación": signal.recommendation,
-                            "Compra mín.": f"{signal.suggested_buy_low:.2f}" if signal.suggested_buy_low else "N/A",
-                            "Compra máx.": f"{signal.suggested_buy_high:.2f}" if signal.suggested_buy_high else "N/A",
-                            "Peso sugerido": f"{signal.suggested_weight_add:.1%}" if signal.suggested_weight_add else "N/A",
-                            "Risk score": f"{signal.risk_score:.1f}" if signal.risk_score else "N/A",
+                            "Compra mín.": f"{signal.suggested_buy_low:.2f}"
+                            if signal.suggested_buy_low
+                            else "N/A",
+                            "Compra máx.": f"{signal.suggested_buy_high:.2f}"
+                            if signal.suggested_buy_high
+                            else "N/A",
+                            "Peso sugerido": f"{signal.suggested_weight_add:.1%}"
+                            if signal.suggested_weight_add
+                            else "N/A",
+                            "Risk score": f"{signal.risk_score:.1f}"
+                            if signal.risk_score
+                            else "N/A",
                             "Nivel de riesgo": signal.rationale_json.get("risk_level", "N/A"),
-                            "Portfolio fit": f"{signal.rationale_json.get('portfolio_fit_score', 'N/A')}",
+                            "Portfolio fit": str(
+                                signal.rationale_json.get("portfolio_fit_score", "N/A")
+                            ),
                         }
                         for label, value in rec_data.items():
                             st.markdown(f"**{label}:** {value}")

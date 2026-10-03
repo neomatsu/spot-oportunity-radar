@@ -122,6 +122,164 @@ def test_cache_hit_skips_provider_call_when_data_is_fresh(db_session) -> None:
     assert provider.called == 0
 
 
+def test_equity_refresh_filters_current_session_before_configured_rollover(
+    db_session,
+) -> None:
+    asset = make_asset(db_session, asset_type="etf")
+    provider = StubProvider("stub")
+    service = make_service(db_session, provider)
+    frame = pd.DataFrame(
+        {
+            "date": [date(2026, 8, 28), date(2026, 8, 31)],
+            "open": [100, 101],
+            "high": [102, 103],
+            "low": [99, 100],
+            "close": [101, 102],
+            "volume": [1000, 500],
+        }
+    )
+
+    filtered = service._closed_daily_bars_only(
+        asset,
+        frame,
+        provider_name="yfinance",
+        current_local=datetime(2026, 8, 31, 20, 0),
+    )
+
+    assert list(filtered["date"]) == [date(2026, 8, 28)]
+
+
+def test_yfinance_current_session_is_accepted_after_configured_rollover(
+    db_session,
+) -> None:
+    asset = make_asset(db_session, asset_type="etf")
+    service = make_service(db_session, StubProvider("stub"))
+    frame = pd.DataFrame(
+        {
+            "date": [date(2026, 8, 28), date(2026, 8, 31)],
+            "open": [100, 101],
+            "high": [102, 103],
+            "low": [99, 100],
+            "close": [101, 102],
+            "volume": [1000, 500],
+        }
+    )
+
+    filtered = service._closed_daily_bars_only(
+        asset,
+        frame,
+        provider_name="yfinance",
+        current_local=datetime(2026, 8, 31, 23, 10),
+    )
+
+    assert list(filtered["date"]) == [date(2026, 8, 28), date(2026, 8, 31)]
+
+
+def test_stale_pinned_provider_falls_back_to_current_provider(
+    db_session,
+    monkeypatch,
+) -> None:
+    asset = make_asset(db_session, symbol="EXSA.DE", asset_type="etf")
+    expected_date = date(2026, 9, 15)
+    stale_provider = StubProvider(
+        "alphavantage",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": expected_date - timedelta(days=1),
+                    "open": 63.77,
+                    "high": 63.90,
+                    "low": 63.36,
+                    "close": 63.58,
+                    "volume": 1000,
+                }
+            ]
+        ),
+    )
+    current_provider = StubProvider(
+        "yfinance",
+        frame=pd.DataFrame(
+            [
+                {
+                    "date": expected_date,
+                    "open": 62.69,
+                    "high": 62.93,
+                    "low": 62.27,
+                    "close": 62.74,
+                    "volume": 1200,
+                }
+            ]
+        ),
+    )
+    settings = SimpleNamespace(demo_mode=True)
+    data_config = SimpleNamespace(
+        prefer_cached_data=False,
+        refresh_on_app_start=False,
+        equities_refresh_interval_hours=24,
+        crypto_refresh_interval_minutes=180,
+        equities_market_day_rollover_hour_local=21,
+        equities_market_day_rollover_minute_local=30,
+        max_staleness_days=5,
+        allow_demo_fallback=True,
+        preserve_real_data_on_provider_failure=True,
+        yfinance_enabled=True,
+        yfinance_as_fallback=True,
+        yfinance_long_history_enabled=False,
+        yfinance_long_history_period="5y",
+        yfinance_normal_history_period="1y",
+        yfinance_long_history_min_rows=1000,
+        yfinance_backfill_asset_types=["stock", "etf"],
+        yfinance_request_pause_seconds=0.5,
+        allow_provider_mixing=True,
+        recent_provider_mix_window_days=90,
+        providers_priority={
+            "stock": ["yfinance", "alphavantage"],
+            "etf": ["yfinance", "alphavantage"],
+            "crypto": [],
+        },
+    )
+    service = MarketDataService(
+        db_session,
+        settings=settings,
+        data_config=data_config,
+        providers={
+            "alphavantage": stale_provider,
+            "yfinance": current_provider,
+        },
+    )
+    status = service.status_repo.get_or_create(asset.id)
+    status.primary_provider = "alphavantage"
+    db_session.flush()
+    monkeypatch.setattr(
+        service,
+        "_expected_equity_latest_date",
+        lambda _current_local: expected_date,
+    )
+
+    result = service.refresh_daily_prices(asset, force=True)
+
+    assert result.status == "refreshed"
+    assert result.provider_name == "yfinance"
+    assert stale_provider.called == 1
+    assert current_provider.called == 1
+    latest_row = (
+        db_session.query(PriceBarDailyORM)
+        .filter_by(asset_id=asset.id)
+        .order_by(PriceBarDailyORM.date.desc())
+        .first()
+    )
+    assert latest_row is not None
+    assert latest_row.date == expected_date
+    assert latest_row.close == 62.74
+    stale_log = (
+        db_session.query(DataRefreshLogORM)
+        .filter_by(asset_id=asset.id, provider="alphavantage")
+        .one()
+    )
+    assert stale_log.status == "provider_error"
+    assert "stale daily data" in stale_log.error_message
+
+
 def test_cache_stale_refresh_ok_adds_only_new_rows(db_session) -> None:
     asset = make_asset(db_session)
     old_date = date.today() - timedelta(days=10)

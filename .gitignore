@@ -18,3 +18,5 @@ reports/sp500_opportunity_optimization/*
 !reports/sp500_opportunity_optimization/report.md
 !reports/sp500_opportunity_optimization/top_configs.csv
 .claude/
+/outputs/
+node_modules/

@@ -132,8 +132,8 @@ class DataSourcesConfigModel(BaseModel):
     refresh_on_app_start: bool = False
     equities_refresh_interval_hours: int = 24
     crypto_refresh_interval_minutes: int = 180
-    equities_market_day_rollover_hour_local: int = 21
-    equities_market_day_rollover_minute_local: int = 30
+    equities_market_day_rollover_hour_local: int = 23
+    equities_market_day_rollover_minute_local: int = 0
     max_staleness_days: int = 5
     allow_demo_fallback: bool = True
     preserve_real_data_on_provider_failure: bool = True

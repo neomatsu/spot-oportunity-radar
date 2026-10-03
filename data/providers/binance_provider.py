@@ -6,7 +6,7 @@ import httpx
 import pandas as pd
 
 from data.database import AssetORM
-from data.providers.base_provider import MarketDataProvider, ProviderError
+from data.providers.base_provider import LiveQuote, MarketDataProvider, ProviderError
 
 
 class BinanceProvider(MarketDataProvider):
@@ -45,6 +45,30 @@ class BinanceProvider(MarketDataProvider):
         )
 
         return self._payload_to_frame(asset.symbol, payload)
+
+    def fetch_current_quote(self, asset: AssetORM) -> LiveQuote | None:
+        now = datetime.now(UTC)
+        start = datetime.combine(now.date(), time.min, tzinfo=UTC)
+        frame = self.fetch_intraday_prices(
+            asset,
+            interval="5m",
+            start_at=start,
+            end_at=now,
+        )
+        if frame.empty:
+            return None
+        latest = frame.iloc[-1]
+        return LiveQuote(
+            session_date=now.date(),
+            as_of=pd.Timestamp(latest["open_time"]).to_pydatetime(),
+            price=float(latest["close"]),
+            open=float(frame.iloc[0]["open"]),
+            high=float(frame["high"].max()),
+            low=float(frame["low"].min()),
+            volume=float(frame["volume"].sum()),
+            provider=self.name,
+            quote_currency=asset.quote_currency,
+        )
 
     def fetch_daily_prices_for_history(
         self,

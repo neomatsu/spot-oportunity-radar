@@ -61,6 +61,22 @@ def test_parser_accepts_spanish_columns_and_decimal_commas(db_session) -> None:
     assert rows[0].errors == ()
 
 
+def test_parser_accepts_utf8_csv(db_session) -> None:
+    content = (
+        "Código activo,Precio objetivo,% de capital sugerido,Capital sugerido,Divisa\n"
+        "EXSA.DE,61.0,10,1000,EUR\n"
+    ).encode("utf-8-sig")
+
+    rows = PlannedEntryImportService(db_session).parse(content)
+
+    assert len(rows) == 1
+    assert rows[0].symbol == "EXSA.DE"
+    assert rows[0].target_price == 61.0
+    assert rows[0].suggested_weight_pct == 10
+    assert rows[0].suggested_capital == 1000
+    assert rows[0].currency == "EUR"
+
+
 def test_imports_multiple_assets_and_reuses_current_planned_entry_logic(db_session) -> None:
     _asset(db_session, "MSFT")
     _asset(db_session, "SXR8.DE", "EUR")

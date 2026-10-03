@@ -51,6 +51,7 @@ class AssetORM(Base):
     quote_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     prices: Mapped[list[PriceBarDailyORM]] = relationship(back_populates="asset")
+    live_quote: Mapped[AssetLiveQuoteORM | None] = relationship(back_populates="asset")
     intraday_prices: Mapped[list[PriceBarIntradayORM]] = relationship(
         back_populates="asset"
     )
@@ -134,6 +135,29 @@ class PriceBarIntradayORM(Base):
     )
 
     asset: Mapped[AssetORM] = relationship(back_populates="intraday_prices")
+
+
+class AssetLiveQuoteORM(Base):
+    __tablename__ = "asset_live_quotes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.id"), unique=True, index=True
+    )
+    session_date: Mapped[date] = mapped_column(Date, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, index=True)
+    price: Mapped[float] = mapped_column(Float)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float, default=0.0)
+    provider: Mapped[str] = mapped_column(String(40))
+    quote_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    asset: Mapped[AssetORM] = relationship(back_populates="live_quote")
 
 
 class TechnicalSnapshotORM(Base):

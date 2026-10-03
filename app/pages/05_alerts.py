@@ -302,7 +302,7 @@ with tab_plans:
     if flash_message:
         st.success(flash_message)
 
-    with st.expander("Importar plan de compras desde Excel", expanded=False):
+    with st.expander("Importar plan de compras desde Excel o CSV", expanded=False):
         st.caption(
             "Columnas obligatorias: Código activo, Precio objetivo y % de capital "
             "sugerido. Antes de guardar se validan y previsualizan todas las filas."
@@ -316,8 +316,8 @@ with tab_plans:
             use_container_width=True,
         )
         uploaded_plan = upload_col.file_uploader(
-            "Plan de compras (.xlsx)",
-            type=["xlsx"],
+            "Plan de compras (.xlsx o .csv)",
+            type=["xlsx", "csv"],
             key="planned_entry_excel",
         )
         if uploaded_plan is not None:
@@ -329,7 +329,7 @@ with tab_plans:
                     enabled_assets = AssetsRepository(session).list_enabled()
 
                 if not import_rows:
-                    st.warning("El Excel no contiene filas de planes de compra.")
+                    st.warning("El fichero no contiene filas de planes de compra.")
                 else:
                     enabled_by_symbol = {asset.symbol.upper(): asset for asset in enabled_assets}
                     asset_by_id = {asset.id: asset for asset in enabled_assets}

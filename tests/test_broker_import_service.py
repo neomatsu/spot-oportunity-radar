@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 import pytest
 
@@ -12,6 +14,7 @@ from services.broker_import_service import (
     KrakenCsvParser,
     TradeRepublicCsvParser,
 )
+from services.planned_entry_service import PlannedEntryService
 
 CSV_HEADER = (
     'datetime,"date","account_type","category","type","asset_class","name",'
@@ -92,6 +95,53 @@ def test_import_maps_isins_recalculates_positions_and_skips_duplicates(db_sessio
     assert transactions[-1].transaction_currency == "EUR"
 
 
+def test_trade_republic_buy_can_confirm_nearby_planned_entry(db_session) -> None:
+    gold, sp500 = _seed_assets(db_session)
+    gold.quote_currency = "EUR"
+    sp500.quote_currency = "EUR"
+    planned_entry = PlannedEntryService(db_session).create_level(
+        asset=gold,
+        target_price=71.0,
+        suggested_weight_pct=10,
+        tolerance_pct=1,
+    )
+    planned_entry.created_at = datetime(2026, 3, 1)
+    historical_entry = PlannedEntryService(db_session).create_level(
+        asset=sp500,
+        target_price=596.2,
+        tolerance_pct=1,
+    )
+    historical_entry.created_at = datetime(2026, 3, 28)
+    sell_entry = PlannedEntryService(db_session).create_level(
+        asset=gold,
+        target_price=79.695,
+        tolerance_pct=1,
+    )
+    sell_entry.created_at = datetime(2026, 3, 1)
+    service = BrokerImportService(db_session)
+    rows = service.parse_trade_republic(_trade_republic_csv())
+
+    candidates = service.planned_entry_execution_candidates(rows)
+
+    assert len(candidates) == 1
+    assert candidates[0].level_id == planned_entry.id
+    assert candidates[0].transaction_id == "gold-buy-1"
+    assert candidates[0].distance_pct == pytest.approx(0.338028, rel=1e-5)
+    assert planned_entry.status == "active"
+
+    summary = service.import_trade_republic(
+        rows,
+        execute_planned_entry_level_ids={planned_entry.id},
+    )
+
+    assert summary.executed_planned_entries == 1
+    assert planned_entry.status == "executed_import"
+    assert planned_entry.last_observed_price == pytest.approx(71.24)
+    assert planned_entry.last_trigger_type == "executed_import:trade_republic"
+    assert historical_entry.status == "active"
+    assert sell_entry.status == "active"
+
+
 def test_unmapped_asset_is_not_imported(db_session) -> None:
     unknown = CSV_HEADER + """2026-03-23T08:10:20Z,"2026-03-23","DEFAULT","TRADING","BUY","STOCK","Unknown","XX0000000001","1","10","-10","","","EUR","","","","Unknown buy","unknown-1","","","",""
 """
@@ -167,6 +217,36 @@ def test_import_kraken_converts_to_eur_accumulates_and_deduplicates(db_session) 
     assert conversion["original_currency"] == "USDC"
     assert conversion["stablecoin_parity_assumption"] is True
     assert conversion["rate"] == pytest.approx(0.9)
+
+
+def test_kraken_buy_can_confirm_usd_planned_entry(db_session) -> None:
+    bitcoin = _seed_bitcoin(db_session)
+    bitcoin.quote_currency = "USD"
+    planned_entry = PlannedEntryService(db_session).create_level(
+        asset=bitcoin,
+        target_price=60_100,
+        tolerance_pct=1,
+    )
+    planned_entry.created_at = datetime(2026, 7, 1)
+    service = BrokerImportService(db_session)
+    service.currency_service.loader = lambda _currency, as_of: pd.DataFrame(
+        {"date": [as_of], "rate": [0.9]}
+    )
+    rows = service.parse_kraken(KRAKEN_CSV)
+
+    candidates = service.planned_entry_execution_candidates(rows)
+
+    assert len(candidates) == 1
+    assert candidates[0].transaction_id == "buy-1"
+    assert candidates[0].transaction_currency == "USDC"
+    summary = service.import_kraken(
+        rows,
+        execute_planned_entry_level_ids={planned_entry.id},
+    )
+
+    assert summary.executed_planned_entries == 1
+    assert planned_entry.status == "executed_import"
+    assert planned_entry.last_observed_price == pytest.approx(60_000)
 
 
 def test_kraken_margin_trade_is_rejected() -> None:

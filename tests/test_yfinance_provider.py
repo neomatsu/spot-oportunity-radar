@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -158,3 +159,40 @@ def test_yfinance_provider_tries_eu_etf_suffix_candidates_for_bare_symbol() -> N
     assert len(frame) == 1
     assert mock_module.Ticker.call_args_list[0].args[0] == "IB28"
     assert mock_module.Ticker.call_args_list[1].args[0] == "IB28.DE"
+
+
+def test_yfinance_provider_builds_current_session_quote_from_intraday_bars() -> None:
+    provider = YFinanceProvider()
+    asset = make_asset("SPY4.DE")
+    history = pd.DataFrame(
+        {
+            "Open": [105.0, 105.5, 106.0],
+            "High": [106.0, 106.5, 107.0],
+            "Low": [104.5, 105.0, 105.8],
+            "Close": [105.5, 106.0, 106.8],
+            "Volume": [100, 150, 200],
+        },
+        index=pd.DatetimeIndex(
+            [
+                "2026-08-31 09:00:00+02:00",
+                "2026-08-31 09:05:00+02:00",
+                "2026-08-31 09:10:00+02:00",
+            ]
+        ),
+    )
+    mock_module = Mock()
+    ticker = mock_module.Ticker.return_value
+    ticker.history.return_value = history
+    ticker.fast_info = {"currency": "EUR"}
+
+    with patch.object(provider, "_get_yfinance_module", return_value=mock_module):
+        quote = provider.fetch_current_quote(asset)
+
+    assert quote is not None
+    assert quote.session_date == date(2026, 8, 31)
+    assert quote.price == pytest.approx(106.8)
+    assert quote.open == pytest.approx(105.0)
+    assert quote.high == pytest.approx(107.0)
+    assert quote.low == pytest.approx(104.5)
+    assert quote.volume == pytest.approx(450)
+    assert quote.quote_currency == "EUR"

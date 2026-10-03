@@ -211,13 +211,16 @@ assets:
     region: US
     enabled: true
     supports_fundamentals: false
-  - symbol: IWM
-    name: iShares Russell 2000 ETF
+  - symbol: ZPRR.DE
+    name: State Street SPDR Russell 2000 U.S. Small Cap UCITS ETF (Acc)
     asset_type: etf
     sector: US Small Cap
-    region: US
+    region: EU
     enabled: true
-    supports_fundamentals: true
+    supports_fundamentals: false
+    quote_currency: EUR
+    external_ids:
+      isin: IE00BJ38QD84
   - symbol: SOXX
     name: iShares Semiconductor ETF
     asset_type: etf

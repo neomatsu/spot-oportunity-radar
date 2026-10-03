@@ -11,6 +11,7 @@ import streamlit as st
 
 from core.config import get_provider_settings, get_settings  # noqa: E402
 from data.database import init_db, seed_assets, session_scope  # noqa: E402
+from services.live_quote_service import LiveQuoteService  # noqa: E402
 from services.recommendation_facade import RecommendationFacade  # noqa: E402
 from services.watchlist_service import WatchlistService  # noqa: E402
 
@@ -41,11 +42,7 @@ summary_col2.metric("Con señal", len(ready_rows))
 summary_col3.metric("Candidatos compra", len(buy_rows))
 summary_col4.metric(
     "Mejor score",
-    (
-        f"{max(row['final_opportunity_score'] for row in ready_rows):.1f}"
-        if ready_rows
-        else "N/A"
-    ),
+    (f"{max(row['final_opportunity_score'] for row in ready_rows):.1f}" if ready_rows else "N/A"),
 )
 
 st.divider()
@@ -57,15 +54,33 @@ with op_col1:
     force_refresh = st.checkbox(
         "Forzar refresh de precios (ignora caché)",
         value=False,
-        help="Por defecto la app reutiliza precios recientes para evitar llamadas innecesarias a la API.",
+        help=(
+            "Por defecto la app reutiliza precios recientes para evitar llamadas "
+            "innecesarias a la API."
+        ),
     )
-btn_col1, btn_col2 = st.columns(2)
-sync_clicked = btn_col1.button("Actualizar precios y señales", use_container_width=True, type="primary")
+btn_col1, btn_col2, btn_col3 = st.columns(3)
+sync_clicked = btn_col1.button(
+    "Actualizar precios y señales", use_container_width=True, type="primary"
+)
 reload_assets_clicked = btn_col2.button("Recargar activos desde YAML", use_container_width=True)
+live_quotes_clicked = btn_col3.button(
+    "Actualizar precios actuales",
+    use_container_width=True,
+    help="Consulta cotizaciones intradía sin modificar las velas diarias cerradas.",
+)
 
 if reload_assets_clicked:
     seed_assets()
     st.success("Activos sincronizados desde config/assets.yaml.")
+
+if live_quotes_clicked:
+    with st.spinner("Consultando precios actuales bajo demanda..."):
+        with session_scope() as session:
+            live_summary = LiveQuoteService(session).refresh_enabled()
+    st.success(f"Precios actuales recibidos para {live_summary.refreshed} activos.")
+    if live_summary.failed:
+        st.warning("Sin cotización actual para: " + ", ".join(live_summary.failed))
 
 if sync_clicked:
     with st.spinner("Actualizando histórico, calculando indicadores y generando señales..."):
@@ -80,7 +95,9 @@ if sync_clicked:
     if summary.demo_assets:
         st.info("Activos en modo demo: " + ", ".join(summary.demo_assets))
     if summary.provider_unavailable_assets:
-        st.warning("Sin proveedor configurado para: " + ", ".join(summary.provider_unavailable_assets))
+        st.warning(
+            "Sin proveedor configurado para: " + ", ".join(summary.provider_unavailable_assets)
+        )
     if summary.provider_error_assets:
         st.error("Error de proveedor para: " + ", ".join(summary.provider_error_assets))
 

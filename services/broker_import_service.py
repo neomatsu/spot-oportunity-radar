@@ -9,9 +9,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.config import load_assets_config
+from data.database import AssetORM
 from data.repositories.assets_repo import AssetsRepository
 from data.repositories.portfolio_repo import PortfolioRepository
 from services.currency_service import CurrencyService
+from services.planned_entry_service import PlannedEntryService
 from services.portfolio_service import PortfolioService
 
 
@@ -40,7 +42,23 @@ class BrokerImportSummary:
     duplicates: int = 0
     unmapped: int = 0
     invalid: int = 0
+    executed_planned_entries: int = 0
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlannedEntryExecutionCandidate:
+    transaction_id: str
+    asset_id: int
+    symbol: str
+    transaction_date: date
+    transaction_price: float
+    transaction_currency: str
+    level_id: int
+    target_price: float
+    level_currency: str
+    distance_pct: float
+    tolerance_pct: float
 
 
 class TradeRepublicCsvParser:
@@ -238,6 +256,7 @@ class BrokerImportService:
         self.portfolio_repo = PortfolioRepository(session)
         self.portfolio_service = PortfolioService(session)
         self.currency_service = CurrencyService(session, base_currency="EUR")
+        self.planned_entry_service = PlannedEntryService(session)
         self.trade_republic_parser = TradeRepublicCsvParser()
         self.kraken_parser = KrakenCsvParser()
 
@@ -286,16 +305,91 @@ class BrokerImportService:
             [item.external_transaction_id for item in transactions],
         )
 
+    def planned_entry_execution_candidates(
+        self,
+        transactions: list[BrokerTransaction],
+        *,
+        manual_mappings: dict[str, int] | None = None,
+    ) -> list[PlannedEntryExecutionCandidate]:
+        mappings = self.resolve_asset_ids(transactions)
+        mappings.update(manual_mappings or {})
+        existing_ids = self.duplicate_transaction_ids(transactions)
+        seen_ids: set[str] = set()
+        candidates_by_level: dict[int, PlannedEntryExecutionCandidate] = {}
+
+        for item in transactions:
+            if (
+                item.external_transaction_id in existing_ids
+                or item.external_transaction_id in seen_ids
+            ):
+                continue
+            seen_ids.add(item.external_transaction_id)
+            if item.transaction_type != "BUY":
+                continue
+            asset_id = mappings.get(item.external_asset_id)
+            if asset_id is None:
+                continue
+            asset = self.session.get(AssetORM, asset_id)
+            if asset is None:
+                continue
+            eligible_levels = []
+            for level in self.planned_entry_service.repo.list_for_asset(
+                asset_id, include_inactive=False
+            ):
+                if not self._currencies_match(item.currency, level.price_currency):
+                    continue
+                created_at = level.created_at
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=UTC)
+                else:
+                    created_at = created_at.astimezone(UTC)
+                if item.occurred_at < created_at:
+                    continue
+                if level.expires_at is not None and item.transaction_date > level.expires_at:
+                    continue
+                distance_pct = abs(
+                    self.planned_entry_service.distance_pct(item.price, level.target_price)
+                )
+                if distance_pct <= float(level.tolerance_pct):
+                    eligible_levels.append((distance_pct, level))
+            if not eligible_levels:
+                continue
+
+            distance_pct, level = min(eligible_levels, key=lambda value: value[0])
+            candidate = PlannedEntryExecutionCandidate(
+                transaction_id=item.external_transaction_id,
+                asset_id=asset_id,
+                symbol=asset.symbol,
+                transaction_date=item.transaction_date,
+                transaction_price=item.price,
+                transaction_currency=item.currency,
+                level_id=level.id,
+                target_price=level.target_price,
+                level_currency=level.price_currency or item.currency,
+                distance_pct=distance_pct,
+                tolerance_pct=level.tolerance_pct,
+            )
+            previous = candidates_by_level.get(level.id)
+            if previous is None or candidate.distance_pct < previous.distance_pct:
+                candidates_by_level[level.id] = candidate
+
+        return sorted(
+            candidates_by_level.values(),
+            key=lambda item: (item.transaction_date, item.symbol, item.level_id),
+        )
+
     def import_trade_republic(
         self,
         transactions: list[BrokerTransaction],
         *,
         manual_mappings: dict[str, int] | None = None,
+        execute_planned_entry_level_ids: set[int] | None = None,
     ) -> BrokerImportSummary:
         return self._import_transactions(
             transactions,
             manual_mappings=manual_mappings,
             convert_to_eur=False,
+            execute_planned_entry_level_ids=execute_planned_entry_level_ids,
         )
 
     def import_kraken(
@@ -303,11 +397,13 @@ class BrokerImportService:
         transactions: list[BrokerTransaction],
         *,
         manual_mappings: dict[str, int] | None = None,
+        execute_planned_entry_level_ids: set[int] | None = None,
     ) -> BrokerImportSummary:
         return self._import_transactions(
             transactions,
             manual_mappings=manual_mappings,
             convert_to_eur=True,
+            execute_planned_entry_level_ids=execute_planned_entry_level_ids,
         )
 
     def _import_transactions(
@@ -316,10 +412,19 @@ class BrokerImportService:
         *,
         manual_mappings: dict[str, int] | None,
         convert_to_eur: bool,
+        execute_planned_entry_level_ids: set[int] | None,
     ) -> BrokerImportSummary:
         manual_mappings = manual_mappings or {}
         mappings = self.resolve_asset_ids(transactions)
         mappings.update(manual_mappings)
+        confirmed_matches = {
+            match.transaction_id: match
+            for match in self.planned_entry_execution_candidates(
+                transactions,
+                manual_mappings=manual_mappings,
+            )
+            if match.level_id in (execute_planned_entry_level_ids or set())
+        }
         metadata = {item.external_asset_id: item for item in transactions}
         for external_id, asset_id in mappings.items():
             item = metadata[external_id]
@@ -400,6 +505,16 @@ class BrokerImportService:
                 external_transaction_id=item.external_transaction_id,
                 external_payload_json=payload,
             )
+            confirmed_match = confirmed_matches.get(item.external_transaction_id)
+            if confirmed_match is not None:
+                executed = self.planned_entry_service.mark_executed_from_import(
+                    confirmed_match.level_id,
+                    execution_price=item.price,
+                    executed_at=item.occurred_at,
+                    external_source=item.external_source,
+                )
+                if executed is not None:
+                    summary.executed_planned_entries += 1
             available_by_asset[asset_id] = (
                 available + item.quantity
                 if item.transaction_type == "BUY"
@@ -410,6 +525,19 @@ class BrokerImportService:
         if summary.imported:
             self.portfolio_service.recalculate_positions()
         return summary
+
+    @staticmethod
+    def _currencies_match(transaction_currency: str, level_currency: str | None) -> bool:
+        def normalize(value: str | None) -> str:
+            raw_currency = str(value or "").strip()
+            if raw_currency == "GBp":
+                return "GBX"
+            currency = raw_currency.upper()
+            if currency in {"USDC", "USDT"}:
+                return "USD"
+            return currency
+
+        return bool(level_currency) and normalize(transaction_currency) == normalize(level_currency)
 
     def _amounts_in_eur(
         self,

@@ -11,10 +11,12 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from app.components.portfolio_history import render_portfolio_history  # noqa: E402
 from data.database import session_scope  # noqa: E402
 from data.repositories.assets_repo import AssetsRepository  # noqa: E402
 from data.repositories.portfolio_repo import PortfolioRepository  # noqa: E402
 from services.broker_import_service import BrokerImportService  # noqa: E402
+from services.portfolio_history_service import PortfolioHistoryService  # noqa: E402
 from services.portfolio_service import PortfolioService  # noqa: E402
 
 st.title("Portfolio")
@@ -28,6 +30,58 @@ def _money(value: float | None) -> str:
     if value is None:
         return "N/A"
     return f"{value:,.2f}"
+
+
+def _planned_entry_execution_confirmation(
+    *,
+    transactions: list,
+    mappings: dict[str, int],
+    key: str,
+) -> set[int]:
+    with session_scope() as session:
+        candidates = BrokerImportService(session).planned_entry_execution_candidates(
+            transactions,
+            manual_mappings=mappings,
+        )
+    if not candidates:
+        return set()
+
+    st.warning(
+        f"Se han detectado {len(candidates)} compras cercanas a puntos del plan. "
+        "Revísalas antes de confirmar: los niveles seleccionados se retirarán del "
+        "plan activo y quedarán registrados como ejecutados por importación."
+    )
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Activo": item.symbol,
+                    "Fecha": item.transaction_date,
+                    "Precio compra": item.transaction_price,
+                    "Divisa": item.transaction_currency,
+                    "Precio objetivo": item.target_price,
+                    "Distancia": item.distance_pct,
+                    "Tolerancia": item.tolerance_pct,
+                    "Operación": item.transaction_id,
+                }
+                for item in candidates
+            ]
+        ),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Precio compra": st.column_config.NumberColumn(format="%.4f"),
+            "Precio objetivo": st.column_config.NumberColumn(format="%.4f"),
+            "Distancia": st.column_config.NumberColumn(format="%.2f%%"),
+            "Tolerancia": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
+    confirmed = st.checkbox(
+        "Confirmo que estos puntos de compra deben marcarse como ejecutados",
+        value=False,
+        key=key,
+    )
+    return {item.level_id for item in candidates} if confirmed else set()
 
 
 def _render_new_transaction(asset_symbols: list[str], symbol_to_asset: dict) -> None:
@@ -240,16 +294,28 @@ with st.expander("Importar operaciones de Trade Republic", expanded=False):
                     )
                 st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
 
+                planned_entry_level_ids = _planned_entry_execution_confirmation(
+                    transactions=broker_transactions,
+                    mappings=selected_mappings,
+                    key="trade_republic_execute_planned_entries",
+                )
+
                 if st.button("Confirmar importación", type="primary"):
                     with session_scope() as session:
                         summary = BrokerImportService(session).import_trade_republic(
                             broker_transactions,
                             manual_mappings=selected_mappings,
+                            execute_planned_entry_level_ids=planned_entry_level_ids,
                         )
                     st.success(
                         f"Importadas: {summary.imported} · Duplicadas: {summary.duplicates} · "
                         f"Sin mapear: {summary.unmapped} · Inválidas: {summary.invalid}"
                     )
+                    if summary.executed_planned_entries:
+                        st.info(
+                            f"Puntos de compra marcados como ejecutados: "
+                            f"{summary.executed_planned_entries}."
+                        )
                     for error in summary.errors:
                         st.warning(error)
         except ValueError as exc:
@@ -335,17 +401,29 @@ with st.expander("Importar operaciones spot de Kraken", expanded=False):
                     use_container_width=True,
                 )
 
+                planned_entry_level_ids = _planned_entry_execution_confirmation(
+                    transactions=broker_transactions,
+                    mappings=selected_mappings,
+                    key="kraken_execute_planned_entries",
+                )
+
                 if st.button("Confirmar importación Kraken", type="primary"):
                     with session_scope() as session:
                         summary = BrokerImportService(session).import_kraken(
                             broker_transactions,
                             manual_mappings=selected_mappings,
+                            execute_planned_entry_level_ids=planned_entry_level_ids,
                         )
                     st.success(
                         f"Importadas: {summary.imported} · Duplicadas: "
                         f"{summary.duplicates} · Sin mapear: {summary.unmapped} · "
                         f"Inválidas: {summary.invalid}"
                     )
+                    if summary.executed_planned_entries:
+                        st.info(
+                            f"Puntos de compra marcados como ejecutados: "
+                            f"{summary.executed_planned_entries}."
+                        )
                     for error in summary.errors:
                         st.warning(error)
                     if summary.imported:
@@ -361,6 +439,7 @@ with session_scope() as session:
     service = PortfolioService(session)
     repo = PortfolioRepository(session)
     portfolio_rows = service.portfolio_rows()
+    portfolio_history = PortfolioHistoryService(session).history()
     transaction_rows = service.transaction_rows()
     exposure = service.get_exposures()
     total_capital = service.get_total_capital(default=0.0)
@@ -392,6 +471,8 @@ summary_cols[2].metric("Valor actual", _money(market_value))
 summary_cols[3].metric("Cash estimado", _money(cash_value))
 summary_cols[4].metric("Peso actual", f"{exposure.total_invested_weight * 100:.1f}%")
 summary_cols[5].metric("Mayor posicion", f"{largest_position * 100:.1f}%")
+
+render_portfolio_history(portfolio_history)
 
 st.markdown("#### Liquidez planificada")
 liquidity_cols = st.columns(4)

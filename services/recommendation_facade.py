@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+from core.enums import FreshnessStatus
 from data.repositories.assets_repo import AssetsRepository
 from services.market_data_service import MarketDataService
 from services.signal_pipeline_service import SignalPipelineService
@@ -48,6 +49,11 @@ class RecommendationFacade:
                 summary.provider_unavailable_assets.append(asset.symbol)
             elif refresh_result.status in {"provider_error", "unexpected_error", "empty_response"}:
                 summary.provider_error_assets.append(asset.symbol)
+
+            if refresh_result.freshness_status != FreshnessStatus.FRESH.value:
+                if asset.symbol not in summary.provider_error_assets:
+                    summary.provider_error_assets.append(asset.symbol)
+                continue
 
             signal_result = self.signal_pipeline.generate_for_asset(asset)
             if signal_result is not None:

@@ -12,6 +12,7 @@ VALID_STATUSES = {
     "triggered",
     "paused",
     "executed_manually",
+    "executed_import",
     "expired",
 }
 
@@ -90,6 +91,25 @@ class PlannedEntryService:
         if entity is not None and status == "active":
             entity.triggered_at = None
             entity.last_trigger_type = None
+        return entity
+
+    def mark_executed_from_import(
+        self,
+        level_id: int,
+        *,
+        execution_price: float,
+        executed_at: datetime,
+        external_source: str,
+    ) -> PlannedEntryLevelORM | None:
+        entity = self.repo.update_status(level_id, "executed_import")
+        if entity is None:
+            return None
+        observed_at = executed_at.astimezone(UTC).replace(tzinfo=None)
+        entity.last_observed_price = float(execution_price)
+        entity.last_observed_at = observed_at
+        entity.last_trigger_type = f"executed_import:{external_source}"
+        entity.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        self.session.flush()
         return entity
 
     def evaluate_asset(

@@ -87,9 +87,18 @@ class PlannedEntryExcelParser:
 
     def parse(self, content: bytes) -> list[PlannedEntryImportRow]:
         try:
-            frame = pd.read_excel(BytesIO(content), sheet_name=0, dtype=object)
+            if content.startswith(b"PK"):
+                frame = pd.read_excel(BytesIO(content), sheet_name=0, dtype=object)
+            else:
+                frame = pd.read_csv(
+                    BytesIO(content),
+                    sep=None,
+                    engine="python",
+                    dtype=object,
+                    encoding="utf-8-sig",
+                )
         except Exception as exc:
-            raise ValueError(f"No se pudo leer el Excel: {exc}") from exc
+            raise ValueError(f"No se pudo leer el fichero Excel/CSV: {exc}") from exc
         normalized_columns = {
             column: self.COLUMN_ALIASES.get(self._normalize_header(column))
             for column in frame.columns

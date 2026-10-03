@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from sqlalchemy import func, select
 
 from app.components.dashboard import (  # noqa: E402
     dashboard_styles,
@@ -17,7 +18,7 @@ from app.components.dashboard import (  # noqa: E402
     detector_sparkline,
     portfolio_metrics_html,
 )
-from data.database import session_scope  # noqa: E402
+from data.database import AssetLiveQuoteORM, session_scope  # noqa: E402
 from services.dashboard_service import DashboardService, DashboardSnapshot  # noqa: E402
 
 RECOMMENDATION_LABELS = {
@@ -33,8 +34,16 @@ SEVERITY_LABELS = {
 }
 
 
+def _live_quote_revision() -> str:
+    with session_scope() as session:
+        updated_at = session.scalar(select(func.max(AssetLiveQuoteORM.updated_at)))
+    return updated_at.isoformat() if updated_at is not None else "no-live-quotes"
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_dashboard() -> DashboardSnapshot:
+def _load_dashboard(quote_revision: str) -> DashboardSnapshot:
+    # The revision participates in Streamlit's cache key.
+    del quote_revision
     with session_scope() as session:
         return DashboardService(session).build()
 
@@ -54,6 +63,15 @@ def _score_style(value: object) -> str:
     return "color:#dc2626;font-weight:700"
 
 
+def _price_reference(row: pd.Series) -> str:
+    value = row["price_date"]
+    if value is None or pd.isna(value):
+        return str(row["price_source"])
+    if hasattr(value, "hour"):
+        return f"{row['price_source']} · {value.strftime('%d/%m %H:%M')} UTC"
+    return f"{row['price_source']} · {value.strftime('%d/%m')}"
+
+
 def _job_status(snapshot: DashboardSnapshot) -> tuple[str, str]:
     if snapshot.last_job is None:
         return "Sin ejecuciones registradas", "#94a3b8"
@@ -70,7 +88,7 @@ st.set_page_config(page_title="Dashboard · Spot Opportunity Radar", layout="wid
 st.html(dashboard_styles())
 
 with st.spinner("Leyendo el estado persistido del radar..."):
-    snapshot = _load_dashboard()
+    snapshot = _load_dashboard(_live_quote_revision())
 
 title_col, status_col = st.columns([2, 1])
 with title_col:
@@ -130,6 +148,72 @@ st.html(
     )
 )
 
+st.subheader("Próximos puntos de compra parcial")
+if not snapshot.planned_entries:
+    st.info("No hay posiciones registradas en el portfolio.")
+else:
+    planned_entries = pd.DataFrame(snapshot.planned_entries)
+    planned_entries["price_reference"] = planned_entries.apply(_price_reference, axis=1)
+    planned_entries["price_currency"] = planned_entries["price_currency"].fillna("")
+    planned_entries["level_status"] = (
+        planned_entries["level_status"]
+        .map(
+            {
+                "active": "Activo",
+                "triggered": "Alcanzado",
+                "price_missing": "Sin precio",
+            }
+        )
+        .fillna("Sin nivel")
+    )
+    display_entries = planned_entries[
+        [
+            "symbol",
+            "current_price",
+            "price_currency",
+            "price_reference",
+            "target_price",
+            "distance_pct",
+            "suggested_weight_pct",
+            "suggested_capital",
+            "level_status",
+        ]
+    ].rename(
+        columns={
+            "symbol": "Símbolo",
+            "current_price": "Precio",
+            "price_currency": "Divisa",
+            "price_reference": "Referencia",
+            "target_price": "Punto más próximo",
+            "distance_pct": "Distancia",
+            "suggested_weight_pct": "% capital",
+            "suggested_capital": "Capital sugerido",
+            "level_status": "Estado",
+        }
+    )
+    st.dataframe(
+        display_entries,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Precio": st.column_config.NumberColumn(format="%.4f"),
+            "Punto más próximo": st.column_config.NumberColumn(format="%.4f"),
+            "Distancia": st.column_config.NumberColumn(
+                format="%+.2f%%",
+                help=(
+                    "Positiva si el precio actual está por encima del nivel; "
+                    "negativa si ya lo ha cruzado."
+                ),
+            ),
+            "% capital": st.column_config.NumberColumn(format="%.2f%%"),
+            "Capital sugerido": st.column_config.NumberColumn(format="%.2f €"),
+        },
+    )
+    st.caption(
+        "Se prioriza la última cotización actual guardada. Si no existe, se usa "
+        "el cierre de la última vela diaria disponible."
+    )
+
 content_columns = st.columns([1.65, 1], gap="large")
 with content_columns[0]:
     st.subheader("Oportunidades prioritarias")
@@ -137,9 +221,7 @@ with content_columns[0]:
         st.info("No hay candidatos de compra o vigilancia con score disponible.")
     else:
         opportunities = pd.DataFrame(snapshot.opportunities)
-        opportunities["recommendation"] = opportunities["recommendation"].map(
-            RECOMMENDATION_LABELS
-        )
+        opportunities["recommendation"] = opportunities["recommendation"].map(RECOMMENDATION_LABELS)
         display = opportunities[
             [
                 "symbol",
@@ -222,12 +304,8 @@ if not snapshot.attention_items:
     st.info("No hay alertas relevantes nuevas durante los últimos 7 días.")
 else:
     attention = pd.DataFrame(snapshot.attention_items)
-    attention["severity"] = attention["severity"].map(SEVERITY_LABELS).fillna(
-        attention["severity"]
-    )
-    attention["created_at"] = pd.to_datetime(attention["created_at"]).dt.strftime(
-        "%d/%m/%Y %H:%M"
-    )
+    attention["severity"] = attention["severity"].map(SEVERITY_LABELS).fillna(attention["severity"])
+    attention["created_at"] = pd.to_datetime(attention["created_at"]).dt.strftime("%d/%m/%Y %H:%M")
     attention = attention.rename(
         columns={
             "symbol": "Símbolo",

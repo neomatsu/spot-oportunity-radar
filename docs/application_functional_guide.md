@@ -117,6 +117,25 @@ La mezcla esta permitida, pero no es silenciosa. El estado del activo registra:
 Antes de sustituir una serie se comparan solapamientos, escalas y transiciones demo-real. Esto
 reduce errores por splits, series ajustadas, tickers incorrectos o cotizaciones en peniques.
 
+#### Cotizacion actual bajo demanda
+
+La aplicacion separa expresamente la cotizacion en curso de las velas diarias cerradas:
+
+- acciones y ETF consultan velas de cinco minutos de Yahoo Finance;
+- cripto consulta velas de cinco minutos de Binance;
+- el OHLCV acumulado de la sesion se guarda en `asset_live_quotes`;
+- `price_bars_daily` sigue conteniendo exclusivamente sesiones cerradas;
+- Asset Detail compone en memoria una vela provisional si su fecha es posterior al ultimo
+  cierre almacenado, y la marca como `Precio en curso`;
+- cuando ya existe la vela cerrada de esa sesion, la provisional deja de anadirse y nunca
+  sobrescribe el cierre.
+
+La consulta se ejecuta solo mediante `Actualizar precios actuales` o `Actualizar precio
+actual`. La cotizacion provisional puede aparecer en el grafico y en los indicadores visuales
+del detalle, pero no modifica snapshots, scoring persistido, alertas ni backtesting. Para
+evitar que Yahoo introduzca una vela `1d` todavia abierta, sus barras del dia actual se filtran
+antes de las 23:00 Europe/Madrid. El job nocturno de las 23:30 conserva el cierre definitivo.
+
 ### 5.4 Fundamentales
 
 El servicio de fundamentales puede solicitar datos a FMP y guardar snapshots. Actualmente
@@ -468,6 +487,22 @@ Procesa ejecuciones spot `BUY` y `SELL`. Cada fill mantiene su `txid`, par, prec
 comision y volumen. El activo base se mapea automaticamente, por ejemplo BTC a BTCUSDT. Los
 importes USDC/USDT se convierten historicamente a EUR y se conserva el payload original. No
 se permiten ventas superiores a las unidades disponibles ni operaciones con margen.
+
+#### Conciliacion con puntos de compra
+
+Durante la previsualizacion de ambos importadores, cada nueva operacion `BUY` se compara con
+los niveles de compra activos o disparados del activo mapeado. Se propone ejecutar unicamente
+el nivel mas cercano cuando la diferencia absoluta entre precio de compra y precio objetivo no
+supera la tolerancia configurada en el nivel, normalmente un 1 %.
+
+La comparacion exige divisas compatibles; para Kraken, USDC y USDT se consideran equivalentes
+a USD. Tambien se exige que la operacion sea posterior a la creacion del nivel. Las ventas,
+operaciones duplicadas, invalidas, sin mapear o anteriores al plan no consumen niveles.
+
+La UI muestra los candidatos y requiere marcar una confirmacion explicita. Si la operacion se
+importa correctamente, el nivel pasa a `executed_import`: desaparece del plan activo y de la
+reserva de cash, pero no se borra fisicamente para conservar trazabilidad. Sin confirmacion, la
+operacion se importa y el plan permanece sin cambios.
 
 #### Reserva para caidas
 

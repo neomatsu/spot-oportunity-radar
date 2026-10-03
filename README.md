@@ -454,6 +454,12 @@ cambio historico de la fecha. `USDC` y `USDT` se tratan como USD bajo una hipote
 explicita de paridad 1:1; el payload conserva importes originales, cambio, fecha y
 provider para auditoria. Si no existe cambio EUR, la fila se omite como invalida.
 
+Antes de confirmar cualquiera de las dos importaciones, las compras nuevas se comparan con los
+puntos de compra activos del mismo activo y divisa. Si el precio queda dentro de la tolerancia
+del nivel, la UI muestra una advertencia y permite confirmar expresamente que el punto pase a
+`executed_import`. El nivel deja de reservar capital, pero se conserva en el historial; ventas,
+duplicados y operaciones anteriores a la creacion del plan se ignoran para esta conciliacion.
+
 ### Divisas y valoracion de cartera
 
 La moneda base del portfolio es EUR. Las operaciones importadas de Trade Republic

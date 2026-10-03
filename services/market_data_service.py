@@ -161,6 +161,20 @@ class MarketDataService:
                     raise ProviderError(
                         f"{provider.name} returned an empty daily series for {asset.symbol}."
                     )
+                frame = self._closed_daily_bars_only(
+                    asset,
+                    frame,
+                    provider_name=provider.name,
+                )
+                if frame.empty:
+                    raise ProviderError(
+                        f"{provider.name} returned no closed daily bars for {asset.symbol}."
+                    )
+                self._validate_latest_closed_bar(
+                    asset,
+                    frame,
+                    provider_name=provider.name,
+                )
 
                 replace_history, refresh_note = self._should_replace_with_real_history(
                     asset_id=asset.id,
@@ -822,6 +836,57 @@ class MarketDataService:
 
     def _is_equity_data_fresh(self, latest_date: date, current_local: datetime) -> bool:
         return latest_date >= self._expected_equity_latest_date(current_local)
+
+    def _validate_latest_closed_bar(
+        self,
+        asset: AssetORM,
+        frame: pd.DataFrame,
+        *,
+        provider_name: str,
+        current_local: datetime | None = None,
+    ) -> None:
+        if asset.asset_type not in {"stock", "etf"} or frame.empty:
+            return
+
+        dates = pd.to_datetime(frame["date"], errors="coerce").dropna()
+        if dates.empty:
+            raise ProviderError(
+                f"{provider_name} returned no valid daily dates for {asset.symbol}."
+            )
+
+        local_now = current_local or datetime.now().replace(tzinfo=None)
+        latest_provider_date = dates.dt.date.max()
+        expected_date = self._expected_equity_latest_date(local_now)
+        if latest_provider_date < expected_date:
+            raise ProviderError(
+                f"{provider_name} returned stale daily data for {asset.symbol}: "
+                f"latest closed bar is {latest_provider_date}, expected at least "
+                f"{expected_date}."
+            )
+
+    def _closed_daily_bars_only(
+        self,
+        asset: AssetORM,
+        frame: pd.DataFrame,
+        *,
+        provider_name: str = "yfinance",
+        current_local: datetime | None = None,
+    ) -> pd.DataFrame:
+        if (
+            asset.asset_type not in {"stock", "etf"}
+            or provider_name != "yfinance"
+            or frame.empty
+        ):
+            return frame
+        local_now = current_local or datetime.now().replace(tzinfo=None)
+        cutoff = time(
+            hour=self.data_config.equities_market_day_rollover_hour_local,
+            minute=self.data_config.equities_market_day_rollover_minute_local,
+        )
+        if local_now.time() >= cutoff:
+            return frame
+        dates = pd.to_datetime(frame["date"], errors="coerce").dt.date
+        return frame.loc[dates < local_now.date()].copy()
 
     def _expected_equity_latest_date(self, current_local: datetime) -> date:
         cutoff = time(

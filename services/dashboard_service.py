@@ -4,9 +4,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from core.config import load_yaml_config
+from data.database import (
+    AssetLiveQuoteORM,
+    AssetORM,
+    PlannedEntryLevelORM,
+    PortfolioPositionORM,
+    PriceBarDailyORM,
+)
 from data.repositories.alerts_repo import AlertsRepository
 from data.repositories.bitcoin_opportunity_repo import BitcoinOpportunityRepository
 from data.repositories.job_runs_repo import JobRunsRepository
@@ -55,6 +63,7 @@ class DashboardSnapshot:
     bitcoin: DashboardDetectorSnapshot
     sp500: DashboardDetectorSnapshot
     portfolio: DashboardPortfolioSnapshot
+    planned_entries: tuple[dict[str, Any], ...]
     opportunities: tuple[dict[str, Any], ...]
     attention_items: tuple[dict[str, Any], ...]
     watched_assets: int
@@ -81,9 +90,7 @@ class DashboardService:
         rows = self.watchlist_service.get_watchlist_rows()
         ready = [row for row in rows if row.get("final_opportunity_score") is not None]
         opportunities = [
-            row
-            for row in ready
-            if row.get("recommendation") in {"BUY_CANDIDATE", "WATCH"}
+            row for row in ready if row.get("recommendation") in {"BUY_CANDIDATE", "WATCH"}
         ]
         opportunities.sort(
             key=lambda row: float(row.get("final_opportunity_score") or 0),
@@ -94,13 +101,12 @@ class DashboardService:
             bitcoin=self._bitcoin_snapshot(),
             sp500=self._sp500_snapshot(),
             portfolio=self._portfolio_snapshot(),
+            planned_entries=self._nearest_planned_entries(),
             opportunities=tuple(opportunities[:10]),
             attention_items=self._attention_items(),
             watched_assets=len(rows),
             ready_assets=len(ready),
-            buy_candidates=sum(
-                row.get("recommendation") == "BUY_CANDIDATE" for row in ready
-            ),
+            buy_candidates=sum(row.get("recommendation") == "BUY_CANDIDATE" for row in ready),
             stale_assets=sum(
                 row.get("freshness_status") != "fresh" or row.get("data_mode") != "real"
                 for row in rows
@@ -192,8 +198,7 @@ class DashboardService:
         positions = self.watchlist_service.get_positions_rows()
         total_capital = self.portfolio_repo.get_total_capital(default=0.0)
         invested_cost = sum(
-            float(row.get("quantity") or 0) * float(row.get("avg_cost") or 0)
-            for row in positions
+            float(row.get("quantity") or 0) * float(row.get("avg_cost") or 0) for row in positions
         )
         exposure = sum(float(row.get("current_weight") or 0) for row in positions)
         market_value = total_capital * exposure if total_capital > 0 else invested_cost
@@ -225,6 +230,123 @@ class DashboardService:
             ),
             allocation=allocation,
         )
+
+    def _nearest_planned_entries(self) -> tuple[dict[str, Any], ...]:
+        latest_price = (
+            select(
+                PriceBarDailyORM.asset_id.label("asset_id"),
+                func.max(PriceBarDailyORM.date).label("latest_date"),
+            )
+            .group_by(PriceBarDailyORM.asset_id)
+            .subquery()
+        )
+        position_rows = self.session.execute(
+            select(
+                PortfolioPositionORM,
+                AssetORM,
+                AssetLiveQuoteORM,
+                PriceBarDailyORM,
+            )
+            .join(AssetORM, AssetORM.id == PortfolioPositionORM.asset_id)
+            .outerjoin(
+                AssetLiveQuoteORM,
+                AssetLiveQuoteORM.asset_id == PortfolioPositionORM.asset_id,
+            )
+            .outerjoin(
+                latest_price,
+                latest_price.c.asset_id == PortfolioPositionORM.asset_id,
+            )
+            .outerjoin(
+                PriceBarDailyORM,
+                (PriceBarDailyORM.asset_id == latest_price.c.asset_id)
+                & (PriceBarDailyORM.date == latest_price.c.latest_date),
+            )
+            .where(PortfolioPositionORM.quantity > 0)
+            .order_by(AssetORM.symbol)
+        ).all()
+        if not position_rows:
+            return ()
+
+        asset_ids = [asset.id for _, asset, _, _ in position_rows]
+        level_rows = self.session.scalars(
+            select(PlannedEntryLevelORM)
+            .where(
+                PlannedEntryLevelORM.asset_id.in_(asset_ids),
+                PlannedEntryLevelORM.status.in_(("active", "triggered")),
+                (
+                    PlannedEntryLevelORM.expires_at.is_(None)
+                    | (PlannedEntryLevelORM.expires_at >= self.now.date())
+                ),
+            )
+            .order_by(PlannedEntryLevelORM.target_price.desc())
+        )
+        levels_by_asset: dict[int, list[PlannedEntryLevelORM]] = {}
+        for level in level_rows:
+            levels_by_asset.setdefault(level.asset_id, []).append(level)
+
+        result: list[dict[str, Any]] = []
+        for _, asset, live_quote, closed_bar in position_rows:
+            current_price = (
+                live_quote.price
+                if live_quote is not None
+                else (closed_bar.close if closed_bar is not None else None)
+            )
+            price_date = (
+                live_quote.as_of
+                if live_quote is not None
+                else (closed_bar.date if closed_bar is not None else None)
+            )
+            levels = levels_by_asset.get(asset.id, [])
+            nearest = None
+            distance_pct = None
+            if current_price is not None and current_price > 0 and levels:
+                nearest = min(
+                    levels,
+                    key=lambda level: abs(float(current_price) / float(level.target_price) - 1.0),
+                )
+                distance_pct = (float(current_price) / float(nearest.target_price) - 1.0) * 100.0
+
+            result.append(
+                {
+                    "symbol": asset.symbol,
+                    "current_price": self._optional_float(current_price),
+                    "price_currency": (
+                        live_quote.quote_currency
+                        if live_quote is not None and live_quote.quote_currency
+                        else asset.quote_currency
+                    ),
+                    "price_source": (
+                        "Actual"
+                        if live_quote is not None
+                        else ("Último cierre" if closed_bar is not None else "Sin precio")
+                    ),
+                    "price_date": price_date,
+                    "target_price": self._optional_float(
+                        nearest.target_price if nearest is not None else None
+                    ),
+                    "distance_pct": distance_pct,
+                    "suggested_weight_pct": self._optional_float(
+                        nearest.suggested_weight_pct if nearest is not None else None
+                    ),
+                    "suggested_capital": self._optional_float(
+                        nearest.suggested_capital if nearest is not None else None
+                    ),
+                    "level_status": (
+                        nearest.status
+                        if nearest is not None
+                        else ("price_missing" if levels else None)
+                    ),
+                }
+            )
+
+        result.sort(
+            key=lambda row: (
+                row["distance_pct"] is None,
+                abs(float(row["distance_pct"] or 0.0)),
+                row["symbol"],
+            )
+        )
+        return tuple(result)
 
     def _attention_items(self) -> tuple[dict[str, Any], ...]:
         boundary = self.now - timedelta(days=7)

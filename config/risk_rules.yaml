@@ -23,7 +23,7 @@ concentration:
 asset_type_base_risk:
   stock: 45
   etf: 24
-  crypto: 72
+  crypto: 24
 
 risk_level_thresholds:
   low_max: 33
